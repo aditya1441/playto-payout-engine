@@ -1,5 +1,6 @@
 from django.urls import path
+from .api import CreatePayoutView
 
 urlpatterns = [
-    # API endpoints will go here
+    path('payouts', CreatePayoutView.as_view(), name='create-payout'),
 ]

@@ -13,7 +13,16 @@ from django.db import IntegrityError, transaction
 from django.db.models import Sum, Case, When, IntegerField, Value
 from django.db.models.functions import Coalesce
 
-from .models import IdempotencyKey, LedgerEntry, LedgerEntryType, Merchant
+from .models import (
+    BankAccount,
+    IdempotencyKey,
+    LedgerEntry,
+    LedgerEntryType,
+    Merchant,
+    Payout,
+    PayoutStatus,
+    PayoutMode,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -24,6 +33,14 @@ class IdempotencyConflictError(Exception):
     """
     Raised when the same Idempotency-Key is reused with a DIFFERENT
     request body. This signals a client programming error.
+    """
+
+
+class InsufficientFundsError(Exception):
+    """
+    Raised when a merchant does not have enough balance to cover a payout.
+    The balance check is always done at the DB level, inside a locked
+    transaction, so this error is authoritative — not a race artefact.
     """
 
 
@@ -328,3 +345,199 @@ def store_idempotency_response(
     # Use queryset .update() instead of key_obj.save() to avoid
     # touching updated_at or triggering unintended signals on the full object.
 
+
+# ---------------------------------------------------------------------------
+# Payout Creation — Core Business Transaction
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PayoutResult:
+    """
+    Returned by create_payout() to the API view.
+
+    is_replay (bool): True if this was an idempotent duplicate request.
+    status_code (int): HTTP status to use in the response.
+    data (dict):       Serialised payout data to return as JSON.
+    """
+    is_replay: bool
+    status_code: int
+    data: dict
+
+
+def create_payout(
+    merchant_id: str,
+    bank_account_id: str,
+    amount: int,
+    mode: str,
+    idempotency_key_header: str,
+    payload: dict,
+) -> PayoutResult:
+    """
+    Create a payout atomically with full safety guarantees.
+
+    Execution order (all inside ONE transaction):
+    ┌────────────────────────────────────────────────────────────────────┐
+    │ 1. BEGIN TRANSACTION                                               │
+    │ 2. SELECT merchant FOR UPDATE  ← serialises concurrent requests   │
+    │ 3. Resolve idempotency key     ← INSERT or detect duplicate        │
+    │    └─ If duplicate & response cached → ROLLBACK + return replay   │
+    │ 4. SELECT bank account         ← validate ownership               │
+    │ 5. Compute balance via DB-level conditional aggregation            │
+    │    └─ Safe: merchant lock prevents concurrent ledger writes        │
+    │ 6. Insufficient funds check    ← pure integer comparison          │
+    │ 7. INSERT Payout (PENDING)                                        │
+    │ 8. INSERT LedgerEntry (DEBIT / PAYOUT_HOLD)                       │
+    │ 9. UPDATE IdempotencyKey with response                            │
+    │10. COMMIT                                                          │
+    └────────────────────────────────────────────────────────────────────┘
+
+    Why select_for_update() on Merchant?
+        PostgreSQL acquires a row-level FOR UPDATE lock. Any other
+        transaction attempting to lock the SAME merchant row (step 2)
+        will block until this transaction commits or rolls back.
+        This serialises all payout operations per merchant, making the
+        balance check in step 5 race-free — no other transaction can
+        INSERT a LedgerEntry for this merchant while we hold the lock.
+
+    Equivalent SQL lock:
+        SELECT * FROM merchants WHERE id = %s FOR UPDATE;
+
+    Args:
+        merchant_id:            UUID of the merchant.
+        bank_account_id:        UUID of the destination bank account.
+        amount:                 Amount in paise (must be positive).
+        mode:                   PayoutMode value (IMPS/NEFT/RTGS/UPI).
+        idempotency_key_header: Raw Idempotency-Key header value.
+        payload:                Parsed request body dict for hash comparison.
+
+    Returns:
+        PayoutResult
+
+    Raises:
+        Merchant.DoesNotExist:     merchant_id is invalid or inactive.
+        BankAccount.DoesNotExist:  account not found or not owned by merchant.
+        InsufficientFundsError:    balance < amount.
+        IdempotencyConflictError:  same key reused with different payload.
+    """
+    with transaction.atomic():
+        # ── Step 2: Lock merchant row ──────────────────────────────────────
+        # select_for_update() translates to:
+        #   SELECT ... FROM merchants WHERE id = %s FOR UPDATE
+        # All concurrent payout requests for this merchant will queue here.
+        merchant = (
+            Merchant.objects
+            .select_for_update()
+            .get(id=merchant_id, is_active=True)
+        )
+
+        # ── Step 3: Resolve idempotency ────────────────────────────────────
+        # The inner transaction.atomic() in resolve_idempotency() becomes a
+        # SAVEPOINT when nested inside our outer atomic block. An IntegrityError
+        # from a duplicate INSERT only rolls back to the savepoint, leaving
+        # the outer transaction intact and usable.
+        idempotency_result = resolve_idempotency(
+            merchant_id=merchant_id,
+            key=idempotency_key_header,
+            payload=payload,
+        )
+
+        if not idempotency_result.created:
+            # Duplicate request — return the cached response without
+            # creating anything. The outer transaction will be rolled back
+            # cleanly since we raise no error; it just commits no writes.
+            if idempotency_result.cached_response:
+                return PayoutResult(
+                    is_replay=True,
+                    status_code=idempotency_result.cached_status,
+                    data=idempotency_result.cached_response,
+                )
+            # First request is still in-flight (no cached response yet).
+            # Tell the client to retry after a short delay.
+            return PayoutResult(
+                is_replay=True,
+                status_code=202,
+                data={
+                    'detail': 'Payout is being processed. Retry with the same Idempotency-Key.',
+                },
+            )
+
+        # ── Step 4: Validate bank account ownership ────────────────────────
+        # Must belong to this merchant AND be verified.
+        # Done inside the lock so we get a consistent view.
+        try:
+            bank_account = BankAccount.objects.get(
+                id=bank_account_id,
+                merchant=merchant,
+                is_verified=True,
+            )
+        except BankAccount.DoesNotExist:
+            raise BankAccount.DoesNotExist(
+                f"Bank account {bank_account_id} not found, not verified, "
+                f"or does not belong to merchant {merchant_id}."
+            )
+
+        # ── Step 5 & 6: DB-level balance check ────────────────────────────
+        # get_balance() issues a single conditional-aggregate SQL query.
+        # It is safe here because the merchant FOR UPDATE lock prevents any
+        # concurrent transaction from writing a LedgerEntry for this merchant.
+        #
+        # Equivalent SQL:
+        #   SELECT
+        #     COALESCE(SUM(CASE WHEN entry_type='CREDIT' THEN amount ELSE 0 END),0)
+        #   - COALESCE(SUM(CASE WHEN entry_type='DEBIT'  THEN amount ELSE 0 END),0)
+        #   FROM ledger_entries WHERE merchant_id = %s;
+        balance = get_balance(merchant_id)
+
+        if balance < amount:
+            raise InsufficientFundsError(
+                f"Insufficient balance. "
+                f"Available: {balance} paise (₹{balance/100:.2f}), "
+                f"Requested: {amount} paise (₹{amount/100:.2f})."
+            )
+
+        # ── Step 7: Create Payout (PENDING) ───────────────────────────────
+        payout = Payout.objects.create(
+            merchant=merchant,
+            bank_account=bank_account,
+            amount=amount,
+            mode=mode,
+            status=PayoutStatus.PENDING,
+            idempotency_key=idempotency_result.idempotency_key,
+        )
+
+        # ── Step 8: Create LedgerEntry (DEBIT / PAYOUT_HOLD) ──────────────
+        # Debit the amount immediately to hold it. The funds will only be
+        # released (credited back) if the payout FAILS or is CANCELLED.
+        # On SUCCESS, the debit stands as the final settlement record.
+        new_balance = balance - amount
+        LedgerEntry.objects.create(
+            merchant=merchant,
+            payout=payout,
+            entry_type=LedgerEntryType.DEBIT,
+            amount=amount,
+            balance_after=new_balance,
+            description=(
+                f"PAYOUT_HOLD: Payout {payout.id} "
+                f"to account ending {bank_account.account_number[-4:]} "
+                f"via {mode}"
+            ),
+        )
+
+        # ── Step 9: Serialise response and store for idempotency replay ───
+        response_data = {
+            'id':              str(payout.id),
+            'merchant_id':     str(merchant.id),
+            'bank_account_id': str(bank_account.id),
+            'amount':          payout.amount,
+            'mode':            payout.mode,
+            'status':          payout.status,
+            'initiated_at':    payout.initiated_at.isoformat(),
+        }
+        store_idempotency_response(
+            idempotency_result.idempotency_key,
+            201,
+            response_data,
+        )
+
+        # ── Step 10: COMMIT (implicit at end of with block) ────────────────
+        return PayoutResult(is_replay=False, status_code=201, data=response_data)

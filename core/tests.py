@@ -10,11 +10,16 @@ from unittest.mock import patch
 from django.db import IntegrityError
 from django.test import TestCase
 
-from core.models import IdempotencyKey, LedgerEntry, LedgerEntryType, Merchant
+from core.models import (
+    BankAccount, IdempotencyKey, LedgerEntry, LedgerEntryType,
+    Merchant, Payout, PayoutStatus,
+)
 from core.services import (
     IdempotencyConflictError,
     IdempotencyResult,
+    InsufficientFundsError,
     compute_request_hash,
+    create_payout,
     get_balance,
     resolve_idempotency,
     store_idempotency_response,
@@ -244,3 +249,165 @@ class IdempotencyServiceTests(TestCase):
         self.assertEqual(refreshed.response_status, 201)
         self.assertEqual(refreshed.response_body, {'payout_id': 'xyz'})
 
+
+class CreatePayoutTests(TestCase):
+    """
+    Integration tests for create_payout().
+    Uses an in-memory SQLite DB; tests all paths through the atomic transaction.
+    """
+
+    def setUp(self):
+        self.merchant = Merchant.objects.create(
+            name='Payout Merchant', email='payout@merchant.com'
+        )
+        self.bank_account = BankAccount.objects.create(
+            merchant=self.merchant,
+            account_holder_name='Test Holder',
+            account_number='123456789012',
+            ifsc_code='HDFC0001234',
+            is_verified=True,
+        )
+        self.key = 'unique-idempotency-key-001'
+        self.payload = {
+            'merchant_id':     str(self.merchant.id),
+            'bank_account_id': str(self.bank_account.id),
+            'amount':          5000,
+            'mode':            'IMPS',
+        }
+
+        # Give the merchant ₹200 (20000 paise) of balance.
+        LedgerEntry.objects.create(
+            merchant=self.merchant,
+            entry_type=LedgerEntryType.CREDIT,
+            amount=20000,
+            balance_after=20000,
+            description='Initial top-up',
+        )
+
+    def _create(self, key=None, payload=None):
+        """Helper to call create_payout with default test values."""
+        p = payload or self.payload
+        return create_payout(
+            merchant_id=p['merchant_id'],
+            bank_account_id=p['bank_account_id'],
+            amount=p['amount'],
+            mode=p['mode'],
+            idempotency_key_header=key or self.key,
+            payload=p,
+        )
+
+    # ------------------------------------------------------------------
+    # Happy path
+    # ------------------------------------------------------------------
+
+    def test_successful_payout_creates_payout_and_ledger_entry(self):
+        """A valid request must create one Payout and one DEBIT LedgerEntry."""
+        result = self._create()
+
+        self.assertFalse(result.is_replay)
+        self.assertEqual(result.status_code, 201)
+        self.assertEqual(result.data['status'], PayoutStatus.PENDING)
+        self.assertEqual(result.data['amount'], 5000)
+
+        self.assertEqual(Payout.objects.count(), 1)
+        payout = Payout.objects.first()
+        self.assertEqual(payout.status, PayoutStatus.PENDING)
+        self.assertEqual(payout.amount, 5000)
+
+        debits = LedgerEntry.objects.filter(entry_type=LedgerEntryType.DEBIT)
+        self.assertEqual(debits.count(), 1)
+        self.assertEqual(debits.first().amount, 5000)
+        self.assertEqual(debits.first().balance_after, 15000)  # 20000 - 5000
+
+    def test_balance_reduced_after_payout(self):
+        """Post-payout balance must reflect the debit."""
+        self._create()
+        self.assertEqual(get_balance(self.merchant.id), 15000)
+
+    def test_payout_linked_to_idempotency_key(self):
+        """The created Payout must reference the IdempotencyKey."""
+        self._create()
+        payout = Payout.objects.first()
+        self.assertIsNotNone(payout.idempotency_key)
+        self.assertEqual(payout.idempotency_key.key, self.key)
+
+    # ------------------------------------------------------------------
+    # Insufficient funds
+    # ------------------------------------------------------------------
+
+    def test_insufficient_funds_raises_error(self):
+        """Amount > balance must raise InsufficientFundsError."""
+        high_amount_payload = {**self.payload, 'amount': 999999}
+        with self.assertRaises(InsufficientFundsError):
+            self._create(payload=high_amount_payload)
+
+    def test_insufficient_funds_creates_no_records(self):
+        """On InsufficientFundsError, NO Payout or extra LedgerEntry must be created."""
+        high_amount_payload = {**self.payload, 'amount': 999999}
+        try:
+            self._create(payload=high_amount_payload)
+        except InsufficientFundsError:
+            pass
+        self.assertEqual(Payout.objects.count(), 0)
+        # Only the original credit entry should exist.
+        self.assertEqual(LedgerEntry.objects.count(), 1)
+
+    # ------------------------------------------------------------------
+    # Idempotency replay
+    # ------------------------------------------------------------------
+
+    def test_duplicate_request_returns_cached_response(self):
+        """Second request with same key returns is_replay=True and cached data."""
+        result1 = self._create()
+        result2 = self._create()  # Same key, same payload
+
+        self.assertFalse(result1.is_replay)
+        self.assertTrue(result2.is_replay)
+        self.assertEqual(result2.data['id'], result1.data['id'])  # Same payout
+        self.assertEqual(Payout.objects.count(), 1)  # NOT duplicated
+
+    def test_duplicate_request_does_not_debit_twice(self):
+        """Balance must only be debited once even if the same request is sent twice."""
+        self._create()
+        self._create()  # Duplicate
+        self.assertEqual(get_balance(self.merchant.id), 15000)  # Debited once only
+
+    def test_different_keys_create_independent_payouts(self):
+        """Two distinct idempotency keys must each create their own payout."""
+        self._create(key='key-001')
+        self._create(key='key-002')
+        self.assertEqual(Payout.objects.count(), 2)
+        self.assertEqual(get_balance(self.merchant.id), 10000)  # 20000 - 5000 - 5000
+
+    # ------------------------------------------------------------------
+    # Bank account validation
+    # ------------------------------------------------------------------
+
+    def test_wrong_bank_account_raises_error(self):
+        """A bank account belonging to a different merchant must be rejected."""
+        other_merchant = Merchant.objects.create(
+            name='Other', email='other3@merchant.com'
+        )
+        other_account = BankAccount.objects.create(
+            merchant=other_merchant,
+            account_holder_name='Other Holder',
+            account_number='999999999999',
+            ifsc_code='ICIC0001234',
+            is_verified=True,
+        )
+        bad_payload = {**self.payload, 'bank_account_id': str(other_account.id)}
+        with self.assertRaises(BankAccount.DoesNotExist):
+            self._create(payload=bad_payload)
+
+    def test_unverified_bank_account_raises_error(self):
+        """An unverified bank account must be rejected."""
+        unverified = BankAccount.objects.create(
+            merchant=self.merchant,
+            account_holder_name='Unverified',
+            account_number='111111111111',
+            ifsc_code='SBIN0001234',
+            is_verified=False,
+        )
+        bad_payload = {**self.payload, 'bank_account_id': str(unverified.id)}
+        with self.assertRaises(BankAccount.DoesNotExist):
+            self._create(payload=bad_payload)
