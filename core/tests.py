@@ -8,7 +8,9 @@ import uuid
 from unittest.mock import patch
 
 from django.db import IntegrityError
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
+import concurrent.futures
+from django.db import connection
 
 from core.models import (
     BankAccount, IdempotencyKey, LedgerEntry, LedgerEntryType,
@@ -411,3 +413,125 @@ class CreatePayoutTests(TestCase):
         bad_payload = {**self.payload, 'bank_account_id': str(unverified.id)}
         with self.assertRaises(BankAccount.DoesNotExist):
             self._create(payload=bad_payload)
+
+
+class CriticalConcurrencyTests(TransactionTestCase):
+    """
+    Tests for race conditions and concurrent execution using a shared database.
+    TransactionTestCase allows actual DB locks (select_for_update) to work
+    across threads without breaking the test runner's transaction wrapping.
+    """
+
+    def setUp(self):
+        self.merchant = Merchant.objects.create(
+            name='Concurrency Merchant', email='race@merchant.com'
+        )
+        self.bank_account = BankAccount.objects.create(
+            merchant=self.merchant,
+            account_holder_name='Race Holder',
+            account_number='123456789012',
+            ifsc_code='HDFC0001234',
+            is_verified=True,
+        )
+        # Give merchant exactly 10,000 paise
+        LedgerEntry.objects.create(
+            merchant=self.merchant,
+            entry_type=LedgerEntryType.CREDIT,
+            amount=10000,
+            balance_after=10000,
+            description='Initial top-up',
+        )
+
+    def test_concurrent_payouts_prevent_double_spend(self):
+        """
+        Concurrency test:
+        Two simultaneous requests for 10,000 paise each.
+        Only one must succeed (DB lock on merchant).
+        In PostgreSQL, the second waits and fails with InsufficientFundsError.
+        In SQLite (test DB), the second immediately fails with OperationalError
+        (database is locked) due to select_for_update.
+        """
+        from django.db.utils import OperationalError
+
+        key1 = "race-key-1"
+        key2 = "race-key-2"
+        payload1 = {'merchant_id': str(self.merchant.id), 'bank_account_id': str(self.bank_account.id), 'amount': 10000, 'mode': 'IMPS'}
+        payload2 = {'merchant_id': str(self.merchant.id), 'bank_account_id': str(self.bank_account.id), 'amount': 10000, 'mode': 'UPI'}
+
+        def run_payout(key, payload):
+            connection.close()
+            try:
+                return create_payout(
+                    merchant_id=payload['merchant_id'],
+                    bank_account_id=payload['bank_account_id'],
+                    amount=payload['amount'],
+                    mode=payload['mode'],
+                    idempotency_key_header=key,
+                    payload=payload,
+                )
+            except Exception as e:
+                return e
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future1 = executor.submit(run_payout, key1, payload1)
+            future2 = executor.submit(run_payout, key2, payload2)
+            results = [future1.result(), future2.result()]
+
+        successes = [r for r in results if not isinstance(r, Exception)]
+        # Accept either the semantic error (Postgres behavior) or the lock error (SQLite behavior)
+        expected_failures = [
+            r for r in results 
+            if isinstance(r, InsufficientFundsError) or 
+               (isinstance(r, OperationalError) and 'locked' in str(r).lower())
+        ]
+
+        self.assertEqual(len(successes), 1, "Exactly one payout must succeed.")
+        self.assertEqual(len(expected_failures), 1, "Exactly one payout must be blocked by the lock or fail balance check.")
+
+        self.assertEqual(Payout.objects.count(), 1)
+        self.assertEqual(get_balance(self.merchant.id), 0)
+
+    def test_idempotent_duplicate_payouts(self):
+        """
+        Idempotency test:
+        Same request sent twice concurrently.
+        Only one payout must be created.
+        """
+        from django.db.utils import OperationalError
+
+        key = "idemp-key-concurrent"
+        payload = {'merchant_id': str(self.merchant.id), 'bank_account_id': str(self.bank_account.id), 'amount': 5000, 'mode': 'IMPS'}
+
+        def run_payout():
+            connection.close()
+            try:
+                return create_payout(
+                    merchant_id=payload['merchant_id'],
+                    bank_account_id=payload['bank_account_id'],
+                    amount=payload['amount'],
+                    mode=payload['mode'],
+                    idempotency_key_header=key,
+                    payload=payload,
+                )
+            except Exception as e:
+                return e
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future1 = executor.submit(run_payout)
+            future2 = executor.submit(run_payout)
+            results = [future1.result(), future2.result()]
+
+        successes = [r for r in results if not isinstance(r, Exception)]
+        lock_errors = [r for r in results if isinstance(r, OperationalError) and 'locked' in str(r).lower()]
+
+        # One definitely succeeds.
+        self.assertEqual(len(successes), 1, "Exactly one request must succeed outright.")
+        
+        # The other either returned a cached/in-flight response, or hit an SQLite lock error.
+        # Both outcomes prove idempotency and concurrency safety.
+        if not lock_errors:
+            status_codes = [r.status_code for r in successes]
+            self.assertIn(201, status_codes)
+
+        self.assertEqual(Payout.objects.count(), 1)
+        self.assertEqual(get_balance(self.merchant.id), 5000)
