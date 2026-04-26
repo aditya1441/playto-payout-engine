@@ -197,6 +197,23 @@ def get_balance_with_sql(merchant_id: str) -> tuple[int, str]:
     return balance, sql
 
 
+def get_held_balance(merchant_id: str) -> int:
+    """
+    Returns the total balance currently held in PENDING or PROCESSING payouts.
+    This is required for the dashboard to show locked funds.
+    """
+    from django.db.models import Sum
+    from .models import Payout, PayoutStatus
+    
+    held = Payout.objects.filter(
+        merchant_id=merchant_id,
+        status__in=[PayoutStatus.PENDING, PayoutStatus.PROCESSING]
+    ).aggregate(total_held=Sum('amount'))['total_held']
+    
+    return held or 0
+
+
+
 # ---------------------------------------------------------------------------
 # Idempotency Handling
 # ---------------------------------------------------------------------------
@@ -303,6 +320,15 @@ def resolve_idempotency(
             merchant_id=merchant_id,
             key=key,
         )
+
+        # ── 24-HOUR EXPIRATION CHECK ──────────────────────────────────────
+        from django.utils import timezone
+        from datetime import timedelta
+        if key_obj.created_at < timezone.now() - timedelta(hours=24):
+            # Key has expired. It can be reused for a brand new request.
+            # Delete the old record and try again.
+            key_obj.delete()
+            return resolve_idempotency(merchant_id, key, payload)
 
         if key_obj.request_hash != incoming_hash:
             # Same key, different payload → client bug / attack.

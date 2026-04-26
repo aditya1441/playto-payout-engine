@@ -9,13 +9,15 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .serializers import PayoutCreateSerializer
+from .serializers import PayoutCreateSerializer, PayoutResponseSerializer
 from .services import (
     IdempotencyConflictError,
     InsufficientFundsError,
     create_payout,
+    get_balance,
+    get_held_balance,
 )
-from .models import BankAccount
+from .models import BankAccount, Merchant, Payout
 
 
 class CreatePayoutView(APIView):
@@ -100,6 +102,56 @@ class CreatePayoutView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # ── 4. Return the appropriate status code ──────────────────────────
         # result.status_code is 201 (new), 200 (replay), or 202 (in-flight).
         return Response(result.data, status=result.status_code)
+
+
+class BalanceView(APIView):
+    """GET /api/v1/merchants/<merchant_id>/balance"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, merchant_id):
+        try:
+            balance = get_balance(merchant_id)
+            held = get_held_balance(merchant_id)
+            return Response({
+                'balance': balance,
+                'held_balance': held
+            }, status=status.HTTP_200_OK)
+        except Merchant.DoesNotExist:
+            return Response({'error': 'Merchant not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class PayoutListView(APIView):
+    """GET /api/v1/merchants/<merchant_id>/payouts"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, merchant_id):
+        # Verify merchant exists
+        if not Merchant.objects.filter(id=merchant_id).exists():
+            return Response({'error': 'Merchant not found.'}, status=status.HTTP_404_NOT_FOUND)
+            
+        payouts = Payout.objects.filter(merchant_id=merchant_id).order_by('-initiated_at')[:50]
+        serializer = PayoutResponseSerializer(payouts, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class LedgerListView(APIView):
+    """GET /api/v1/merchants/<merchant_id>/ledger"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, merchant_id):
+        from .models import LedgerEntry
+        if not Merchant.objects.filter(id=merchant_id).exists():
+            return Response({'error': 'Merchant not found.'}, status=status.HTTP_404_NOT_FOUND)
+            
+        entries = LedgerEntry.objects.filter(merchant_id=merchant_id).order_by('-created_at')[:50]
+        data = [{
+            'id': str(e.id),
+            'type': e.entry_type,
+            'amount': e.amount,
+            'balance_after': e.balance_after,
+            'description': e.description,
+            'created_at': e.created_at.isoformat()
+        } for e in entries]
+        return Response(data, status=status.HTTP_200_OK)
+
