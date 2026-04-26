@@ -541,3 +541,180 @@ def create_payout(
 
         # ── Step 10: COMMIT (implicit at end of with block) ────────────────
         return PayoutResult(is_replay=False, status_code=201, data=response_data)
+
+
+# ---------------------------------------------------------------------------
+# Payout Processing — Status Transitions (used by Celery worker)
+# ---------------------------------------------------------------------------
+
+def transition_payout_to_processing(payout_id: str) -> 'Payout | None':
+    """
+    Atomically move a payout from PENDING → PROCESSING using a
+    Compare-And-Swap (CAS) UPDATE.
+
+    This is the key idempotency guard for the worker:
+      - Two workers racing on the same payout_id will both run this.
+      - Django's .update() translates to a single atomic SQL statement:
+            UPDATE payouts
+            SET    status = 'PROCESSING'
+            WHERE  id     = %s
+              AND  status = 'PENDING';
+      - Only ONE of the two workers will see `updated_rows = 1`.
+      - The other sees `updated_rows = 0` and exits safely (returns None).
+
+    This prevents double-processing entirely at the DB level, with no
+    application-level locking or distributed locks required.
+
+    Returns:
+        Payout — if this worker successfully claimed the payout.
+        None   — if the payout was already claimed or beyond PENDING.
+    """
+    updated_rows = Payout.objects.filter(
+        id=payout_id,
+        status=PayoutStatus.PENDING,
+    ).update(status=PayoutStatus.PROCESSING)
+
+    if updated_rows == 0:
+        return None  # Already claimed by another worker, or already resolved.
+
+    # Fetch the full object now that we own it.
+    return Payout.objects.select_related('merchant', 'bank_account').get(id=payout_id)
+
+
+def complete_payout(payout: 'Payout', reference_id: str) -> bool:
+    """
+    Atomically mark a payout as COMPLETED.
+
+    Uses a guarded UPDATE (WHERE status='PROCESSING') so if another
+    process already resolved this payout (e.g., via admin or a race),
+    this call is a safe no-op.
+
+    Args:
+        payout:       The Payout instance currently in PROCESSING state.
+        reference_id: UTR / gateway transaction ID from the payment rail.
+
+    Returns:
+        bool: True if the update applied, False if payout was already resolved.
+
+    SQL:
+        UPDATE payouts
+        SET    status       = 'COMPLETED',
+               reference_id = %s,
+               processed_at = NOW()
+        WHERE  id     = %s
+          AND  status = 'PROCESSING';
+    """
+    from django.utils import timezone
+
+    updated_rows = Payout.objects.filter(
+        id=payout.id,
+        status=PayoutStatus.PROCESSING,
+    ).update(
+        status=PayoutStatus.COMPLETED,
+        reference_id=reference_id,
+        processed_at=timezone.now(),
+    )
+    return updated_rows == 1
+
+
+def fail_payout(payout: 'Payout', reason: str) -> bool:
+    """
+    Atomically mark a payout as FAILED and insert a CREDIT reversal
+    ledger entry to release the held funds back to the merchant's balance.
+
+    Both the status update and the reversal ledger entry are wrapped in
+    a single transaction.atomic() so they either both succeed or both
+    roll back — the ledger stays consistent.
+
+    Guarded with WHERE status='PROCESSING' to be safe under duplicate
+    task execution (idempotent: second call is a no-op).
+
+    Args:
+        payout: The Payout instance currently in PROCESSING state.
+        reason: Human-readable failure reason (stored for debugging).
+
+    Returns:
+        bool: True if this call performed the transition, False if already done.
+
+    SQL (conceptual):
+        BEGIN;
+        UPDATE payouts
+        SET    status         = 'FAILED',
+               failure_reason = %s,
+               processed_at   = NOW()
+        WHERE  id = %s AND status = 'PROCESSING';
+
+        -- Only if above updated 1 row:
+        INSERT INTO ledger_entries
+          (merchant_id, payout_id, entry_type, amount, balance_after, description)
+        VALUES (%s, %s, 'CREDIT', %s, %s, 'PAYOUT_REVERSAL: ...');
+        COMMIT;
+    """
+    from django.utils import timezone
+
+    with transaction.atomic():
+        # Lock merchant to safely read balance for the reversal snapshot.
+        merchant = Merchant.objects.select_for_update().get(id=payout.merchant_id)
+
+        updated_rows = Payout.objects.filter(
+            id=payout.id,
+            status=PayoutStatus.PROCESSING,
+        ).update(
+            status=PayoutStatus.FAILED,
+            failure_reason=reason,
+            processed_at=timezone.now(),
+        )
+
+        if updated_rows == 0:
+            # Already resolved by another worker. Do NOT double-credit.
+            return False
+
+        # Compute post-reversal balance for the snapshot field.
+        balance_before_reversal = get_balance(merchant.id)
+        balance_after_reversal  = balance_before_reversal + payout.amount
+
+        LedgerEntry.objects.create(
+            merchant=merchant,
+            payout=payout,
+            entry_type=LedgerEntryType.CREDIT,
+            amount=payout.amount,
+            balance_after=balance_after_reversal,
+            description=(
+                f"PAYOUT_REVERSAL: Payout {payout.id} failed — {reason}"
+            ),
+        )
+        return True
+
+
+def reset_processing_to_pending(payout_id: str, older_than_seconds: int = 30) -> bool:
+    """
+    Safety-net function used by the retry_stuck_payouts beat task.
+
+    Resets a payout that has been stuck in PROCESSING for longer than
+    `older_than_seconds` back to PENDING so it can be re-enqueued.
+
+    Why can a payout get stuck in PROCESSING?
+      - Worker picked it up, crashed after the CAS update but before
+        completing/failing it.
+      - CELERY_TASK_REJECT_ON_WORKER_LOST=True should handle most cases,
+        but this is a belt-and-suspenders safety net.
+
+    Args:
+        payout_id:          UUID string of the payout.
+        older_than_seconds: Only reset if stuck for at least this long.
+
+    Returns:
+        bool: True if reset was applied.
+    """
+    from django.utils import timezone
+    from datetime import timedelta
+
+    cutoff = timezone.now() - timedelta(seconds=older_than_seconds)
+
+    updated_rows = Payout.objects.filter(
+        id=payout_id,
+        status=PayoutStatus.PROCESSING,
+        initiated_at__lte=cutoff,   # Only touch genuinely old ones.
+    ).update(status=PayoutStatus.PENDING)
+
+    return updated_rows == 1
