@@ -246,57 +246,22 @@ def resolve_idempotency(
     payload: dict,
 ) -> IdempotencyResult:
     """
-    The core idempotency gate. Call this BEFORE creating a payout.
-
-    Algorithm (race-safe):
-    ┌─────────────────────────────────────────────────────────────┐
-    │ 1. Hash the incoming payload.                               │
-    │ 2. Attempt to INSERT a new IdempotencyKey row.              │
-    │    ├─ INSERT succeeds → brand new request → created=True.   │
-    │    └─ IntegrityError (duplicate) →                          │
-    │       a. SELECT the existing row.                           │
-    │       b. Compare request_hash.                              │
-    │          ├─ Hash matches → safe replay → created=False.     │
-    │          └─ Hash differs → CONFLICT → raise error.          │
-    └─────────────────────────────────────────────────────────────┘
-
-    Why not get_or_create()?
-        get_or_create() has a TOCTOU window: it SELECTs first, then
-        INSERTs. Two concurrent requests can both SELECT "not found"
-        and then both attempt INSERT. The second INSERT raises
-        IntegrityError anyway, but Django's get_or_create catches it
-        internally and retries the SELECT — which works, but hides the
-        race. Here we make the race explicit and intentional.
-
-    Why transaction.atomic() on the INSERT?
-        To ensure the INSERT and any subsequent work within the caller's
-        transaction is rolled back cleanly if the caller raises an
-        exception AFTER we've inserted the key but BEFORE we store the
-        response. The key record is therefore provisional until
-        store_idempotency_response() is called.
-
-    Equivalent SQL (INSERT ... ON CONFLICT DO NOTHING style):
-        BEGIN;
-        INSERT INTO idempotency_keys (merchant_id, key, request_hash, ...)
-        VALUES (%s, %s, %s, ...)
-        ON CONFLICT (merchant_id, key) DO NOTHING;
-
-        -- If 0 rows inserted, read the existing row:
-        SELECT * FROM idempotency_keys
-        WHERE merchant_id = %s AND key = %s;
-        COMMIT;
+    Idempotency gate. Validates if a request is a replay or a new transaction.
+    
+    Relies on database unique constraint (merchant_id, key) to handle race 
+    conditions securely without TOCTOU windows.
 
     Args:
-        merchant_id: UUID of the merchant making the request.
-        key:         The raw Idempotency-Key header value.
-        payload:     Parsed request body dict.
+        merchant_id: UUID of the merchant.
+        key: The raw Idempotency-Key header value.
+        payload: Parsed request body dict.
 
     Returns:
         IdempotencyResult
 
     Raises:
-        IdempotencyConflictError: if key reused with different body.
-        Merchant.DoesNotExist:    if merchant_id is invalid.
+        IdempotencyConflictError: If key is reused with a different payload.
+        Merchant.DoesNotExist: If merchant_id is invalid.
     """
     if not Merchant.objects.filter(id=merchant_id).exists():
         raise Merchant.DoesNotExist(f"Merchant {merchant_id} does not exist.")

@@ -42,33 +42,17 @@ _PROB_FAILURE = 0.20   # 20%  → cumulative 0.90
 )
 def process_payout(self, payout_id: str) -> dict:
     """
-    Process a single payout through the (simulated) payment gateway.
+    Process a single payout through the simulated payment gateway.
 
-    Idempotency guarantee:
-        The PENDING → PROCESSING transition uses a CAS UPDATE:
-            UPDATE payouts SET status='PROCESSING'
-            WHERE id=%s AND status='PENDING'
-        Only ONE worker can win this race. Any duplicate execution
-        (re-delivery, manual retry, beat re-queue) will get
-        updated_rows=0 and exit cleanly.
-
-    Simulation outcomes:
-        70%  SUCCESS → COMPLETED  (UTR reference generated)
-        20%  FAILURE → FAILED     (reversal CREDIT ledger entry written)
-        10%  STUCK   → payout reset to PENDING, task retried with
-                       exponential backoff (60 × 2^attempt seconds)
-
-    Retry policy (max_retries=3):
-        Attempt 1: immediate
-        Attempt 2: 30s
-        Attempt 3: 60s
-        Attempt 4: raises MaxRetriesExceededError → on_failure() marks FAILED
+    Relies on CAS (Compare-And-Swap) updates to guarantee exactly-once execution.
+    Handles simulated success (70%), failure (20%), and timeout/stuck states (10%) 
+    with exponential backoff retries.
 
     Args:
-        payout_id (str): UUID of the Payout to process.
+        payout_id: UUID of the Payout.
 
     Returns:
-        dict: {'payout_id', 'outcome', ...outcome-specific fields}
+        dict: Execution outcome details.
     """
     from .services import (
         transition_payout_to_processing,
