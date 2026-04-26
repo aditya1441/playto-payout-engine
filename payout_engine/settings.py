@@ -154,9 +154,44 @@ REST_FRAMEWORK = {
 CORS_ALLOW_ALL_ORIGINS = True  # For development only
 
 # Celery Settings
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = TIME_ZONE
+# ─────────────────────────────────────────────────────────────────────────────
+# Broker & result backend both point to Redis.
+# Use database index 0 for broker, 1 for results to avoid key collisions.
+CELERY_BROKER_URL      = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND  = 'redis://localhost:6379/1'
+
+# Serialisation
+CELERY_ACCEPT_CONTENT      = ['json']
+CELERY_TASK_SERIALIZER     = 'json'
+CELERY_RESULT_SERIALIZER   = 'json'
+CELERY_TIMEZONE            = TIME_ZONE
+
+# Reliability
+CELERY_TASK_ACKS_LATE           = True   # Ack only after task completes (not on pick-up)
+CELERY_TASK_REJECT_ON_WORKER_LOST = True # Re-queue if worker dies mid-task
+CELERY_TASK_TRACK_STARTED       = True   # Record when a task moves to STARTED state
+
+# Concurrency / prefetch
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1    # Fetch 1 task at a time (important for long tasks)
+CELERY_TASK_MAX_RETRIES           = 5   # Default max retries for tasks
+
+# Result expiry — keep results for 24 hours then auto-delete
+CELERY_RESULT_EXPIRES = 60 * 60 * 24
+
+# Task routing — all payout tasks go to the dedicated 'payouts' queue
+CELERY_TASK_ROUTES = {
+    'core.tasks.process_payout': {'queue': 'payouts'},
+}
+
+# Celery Beat schedule (periodic tasks)
+# Defined here so the schedule lives in version control, not the DB.
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    # Placeholder — retry any stuck PENDING payouts every 5 minutes.
+    # Task implementation will be added in the payout processing step.
+    'retry-stuck-payouts': {
+        'task': 'core.tasks.retry_stuck_payouts',
+        'schedule': crontab(minute='*/5'),
+    },
+}
