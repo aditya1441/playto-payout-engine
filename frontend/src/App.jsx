@@ -75,72 +75,80 @@ function App() {
 
   const getStatusText = (status) => {
     switch (status) {
-      case 'COMPLETED': return <span className="text-gray-500 text-sm">settled</span>;
-      case 'FAILED': return <span className="text-gray-500 text-sm">failed</span>;
-      default: return <span className="text-gray-500 text-sm">pending</span>;
+      case 'COMPLETED': return <span className="text-emerald-400 text-sm font-medium">Settled</span>;
+      case 'FAILED': return <span className="text-red-400 text-sm font-medium">Failed</span>;
+      default: return <span className="text-zinc-500 text-sm font-medium">Pending</span>;
     }
   };
 
   return (
-    <div className="min-h-screen bg-white text-black font-sans flex justify-center py-20 px-6">
-      <div className="w-full max-w-xl space-y-16">
+    <div className="min-h-screen bg-black flex justify-center py-20 px-6 relative overflow-hidden font-sans text-white">
+      
+      {/* Dark modern background gradients */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[500px] bg-gradient-to-b from-orange-500/10 to-transparent blur-[120px] pointer-events-none"></div>
+      <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-gradient-to-t from-orange-600/5 to-transparent blur-[100px] pointer-events-none"></div>
+
+      <div className="w-full max-w-xl space-y-16 relative z-10">
         
         {/* Balance Section */}
-        <div className="space-y-1">
-          <p className="text-sm text-gray-500">Available balance</p>
-          <h1 className="text-6xl font-medium tracking-tight">
+        <div className="space-y-2 text-center md:text-left flex flex-col items-center md:items-start">
+          <p className="text-sm font-medium text-zinc-400 tracking-wider uppercase">Available Balance</p>
+          <h1 className="text-6xl md:text-7xl font-bold tracking-tighter bg-gradient-to-br from-orange-300 via-orange-500 to-amber-600 bg-clip-text text-transparent pb-2">
             ₹{loading ? '...' : (balance / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
           </h1>
           {heldBalance > 0 && (
-            <p className="text-sm text-gray-400 pt-1">
-              ₹{(heldBalance / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} held
+            <p className="text-sm text-zinc-500 font-medium">
+              ₹{(heldBalance / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} held in escrow
             </p>
           )}
         </div>
 
         {/* Action Form */}
-        <div>
-          <form onSubmit={handlePayout} className="flex gap-3">
-            <input
-              type="number"
-              step="0.01"
-              min="1"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="flex-1 bg-transparent border border-gray-200 rounded-lg py-3 px-4 text-black placeholder:text-gray-400 focus:outline-none focus:border-gray-400 transition-colors"
-              placeholder="Amount"
-            />
+        <div className="bg-zinc-900/50 backdrop-blur-xl border border-white/5 rounded-2xl p-6 shadow-2xl">
+          <form onSubmit={handlePayout} className="flex flex-col sm:flex-row gap-4">
+            <div className="relative flex-1">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-orange-500 font-bold">₹</span>
+              <input
+                type="number"
+                step="0.01"
+                min="1"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="w-full bg-black/50 border border-white/10 rounded-xl py-4 pl-10 pr-4 text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/50 transition-all font-medium text-lg"
+                placeholder="0.00"
+              />
+            </div>
             <button 
               type="submit" 
               disabled={submitting || !amount}
-              className="bg-black text-white px-6 py-3 rounded-lg font-medium hover:bg-gray-800 transition-colors disabled:opacity-50"
+              className="bg-gradient-to-r from-orange-500 to-amber-600 text-black px-8 py-4 rounded-xl font-bold text-lg hover:from-orange-400 hover:to-amber-500 transition-all shadow-[0_0_20px_rgba(249,115,22,0.3)] hover:shadow-[0_0_30px_rgba(249,115,22,0.5)] disabled:opacity-50 disabled:pointer-events-none"
             >
-              {submitting ? 'Sending' : 'Withdraw'}
+              {submitting ? 'Processing' : 'Withdraw'}
             </button>
           </form>
         </div>
 
         {/* Transactions List */}
         <div>
-          <h2 className="text-sm text-gray-500 mb-6">Recent Activity</h2>
+          <h2 className="text-sm font-medium text-zinc-400 mb-6 uppercase tracking-wider">Recent Activity</h2>
           
           {loading && payouts.length === 0 ? (
-            <div className="text-gray-400 text-sm">Loading...</div>
+            <div className="text-zinc-600 text-sm">Loading...</div>
           ) : payouts.length === 0 ? (
-            <div className="text-gray-400 text-sm">No recent transactions</div>
+            <div className="text-zinc-600 text-sm">No recent transactions</div>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-4">
               {payouts.map((p) => (
-                <div key={p.id} className="flex justify-between items-center group">
+                <div key={p.id} className="flex justify-between items-center p-5 rounded-xl bg-zinc-900/30 border border-white/5 hover:bg-zinc-900/60 transition-colors">
                   <div>
-                    <div className="font-medium">Bank Transfer</div>
-                    <div className="text-sm text-gray-500 mt-0.5">
+                    <div className="font-semibold text-zinc-100">Bank Transfer</div>
+                    <div className="text-xs text-zinc-500 mt-1 font-medium">
                       {new Date(p.initiated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="font-medium">
-                      ₹{(p.amount / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    <div className="font-bold text-lg text-zinc-100">
+                      -₹{(p.amount / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </div>
                     {getStatusText(p.status)}
                   </div>

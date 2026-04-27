@@ -5,7 +5,7 @@
 
 @layer base {
   body {
-    @apply bg-white text-black antialiased min-h-screen;
+    @apply bg-black text-white antialiased min-h-screen selection:bg-orange-500/30;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     overscroll-behavior-y: none;
   }
