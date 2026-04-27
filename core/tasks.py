@@ -17,7 +17,6 @@ _PROB_FAILURE = 0.20
     name='core.tasks.process_payout',
     max_retries=3,
     default_retry_delay=30,
-    queue='payouts',
 )
 def process_payout(self, payout_id: str) -> dict:
     """
@@ -72,21 +71,19 @@ def process_payout(self, payout_id: str) -> dict:
     )
     raise self.retry(exc=Exception(f"Gateway timeout for payout {payout_id}"), countdown=countdown)
 
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        """All retries exhausted — mark the payout FAILED and reverse the hold."""
+        from .services import fail_payout, transition_payout_to_processing
 
-@process_payout.on_failure
-def on_process_payout_failure(self, exc, task_id, args, kwargs, einfo):
-    """All retries exhausted — mark the payout FAILED and reverse the hold."""
-    from .services import fail_payout, transition_payout_to_processing
+        payout_id = args[0] if args else kwargs.get('payout_id')
+        logger.error("process_payout max retries exceeded payout_id=%s", payout_id)
 
-    payout_id = args[0] if args else kwargs.get('payout_id')
-    logger.error("process_payout max retries exceeded payout_id=%s", payout_id)
+        if not payout_id:
+            return
 
-    if not payout_id:
-        return
-
-    payout = transition_payout_to_processing(payout_id)
-    if payout:
-        fail_payout(payout, f"Max retries exceeded: {exc}")
+        payout = transition_payout_to_processing(payout_id)
+        if payout:
+            fail_payout(payout, f"Max retries exceeded: {exc}")
 
 
 @shared_task(name='core.tasks.retry_stuck_payouts', queue='default')
@@ -111,7 +108,7 @@ def retry_stuck_payouts() -> dict:
     ).values_list('id', flat=True)
 
     for payout_id in stale_pending:
-        process_payout.apply_async(args=[str(payout_id)], queue='payouts')
+        process_payout.apply_async(args=[str(payout_id)])
         requeued_pending += 1
 
     stale_processing = Payout.objects.filter(
@@ -121,7 +118,7 @@ def retry_stuck_payouts() -> dict:
 
     for payout_id in stale_processing:
         if reset_processing_to_pending(str(payout_id), older_than_seconds=30):
-            process_payout.apply_async(args=[str(payout_id)], queue='payouts')
+            process_payout.apply_async(args=[str(payout_id)])
             reset_processing += 1
 
     logger.info(

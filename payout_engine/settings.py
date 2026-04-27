@@ -178,10 +178,7 @@ CELERY_TASK_MAX_RETRIES           = 5   # Default max retries for tasks
 # Result expiry — keep results for 24 hours then auto-delete
 CELERY_RESULT_EXPIRES = 60 * 60 * 24
 
-# Task routing — all payout tasks go to the dedicated 'payouts' queue
-CELERY_TASK_ROUTES = {
-    'core.tasks.process_payout': {'queue': 'payouts'},
-}
+# All tasks use the default queue — simplifies local development and deployment.
 
 # Celery Beat schedule (periodic tasks)
 # Defined here so the schedule lives in version control, not the DB.

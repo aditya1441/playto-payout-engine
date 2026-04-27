@@ -245,6 +245,11 @@ def create_payout(
         }
         store_idempotency_response(idempotency_result.idempotency_key, 201, response_data)
 
+        # Dispatch outside the transaction so the DB row is committed and visible
+        # to the Celery worker before it picks it up.
+        from .tasks import process_payout
+        transaction.on_commit(lambda: process_payout.apply_async(args=[str(payout.id)]))
+
         return PayoutResult(is_replay=False, status_code=201, data=response_data)
 
 
