@@ -3,17 +3,7 @@ from django.db import models
 from django.utils import timezone
 
 
-# ---------------------------------------------------------------------------
-# Enums (TextChoices)
-# ---------------------------------------------------------------------------
-
 class PayoutStatus(models.TextChoices):
-    """
-    State machine for a Payout:
-      PENDING → PROCESSING → COMPLETED
-                           → FAILED
-      PENDING → CANCELLED
-    """
     PENDING    = 'PENDING',    'Pending'
     PROCESSING = 'PROCESSING', 'Processing'
     COMPLETED  = 'COMPLETED',  'Completed'
@@ -22,61 +12,31 @@ class PayoutStatus(models.TextChoices):
 
 
 class LedgerEntryType(models.TextChoices):
-    """
-    Direction of money movement in the ledger.
-    CREDIT increases available balance; DEBIT decreases it.
-    """
     CREDIT = 'CREDIT', 'Credit'
     DEBIT  = 'DEBIT',  'Debit'
 
 
 class PayoutMode(models.TextChoices):
-    """
-    Rail used to transfer funds.
-    Stored here so we can route to the correct payment gateway.
-    """
     IMPS = 'IMPS', 'IMPS'
     NEFT = 'NEFT', 'NEFT'
     RTGS = 'RTGS', 'RTGS'
     UPI  = 'UPI',  'UPI'
 
 
-# ---------------------------------------------------------------------------
-# Merchant
-# ---------------------------------------------------------------------------
-
 class Merchant(models.Model):
     """
-    Represents a business entity that uses the payout engine.
-    No balance field — balance is always derived from LedgerEntry
-    to maintain a single source of truth and full auditability.
+    Represents a business on the platform.
+
+    Balance is intentionally NOT stored here — it is derived from ledger
+    entries to maintain a single source of truth and full auditability.
+    A mutable balance field is a liability in a money-moving system.
     """
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-        # UUID avoids sequential ID enumeration attacks.
-    )
-    name = models.CharField(
-        max_length=255,
-        # Human-readable name for display in admin / reports.
-    )
-    email = models.EmailField(
-        unique=True,
-        # Unique contact point; used for notifications.
-    )
-    is_active = models.BooleanField(
-        default=True,
-        # Soft-disable a merchant without deleting their data.
-    )
-    created_at = models.DateTimeField(
-        default=timezone.now,
-        # Immutable audit timestamp; NOT auto_now so migrations don't wipe it.
-    )
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        # Tracks last profile change.
-    )
+    id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name       = models.CharField(max_length=255)
+    email      = models.EmailField(unique=True)
+    is_active  = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'merchants'
@@ -90,53 +50,23 @@ class Merchant(models.Model):
         return f"Merchant({self.name}, {self.email})"
 
 
-# ---------------------------------------------------------------------------
-# BankAccount
-# ---------------------------------------------------------------------------
-
 class BankAccount(models.Model):
     """
-    A verified bank account belonging to a merchant.
-    Multiple accounts per merchant are allowed, but only one can
-    be the default destination for payouts at a time.
+    A verified Indian bank account belonging to a merchant.
+    Multiple accounts per merchant are allowed.
+    Only is_verified=True accounts are eligible for payouts.
     """
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-    )
-    merchant = models.ForeignKey(
-        Merchant,
-        on_delete=models.PROTECT,
-        related_name='bank_accounts',
-        # PROTECT: never delete a merchant with existing bank accounts.
-    )
-    account_holder_name = models.CharField(
-        max_length=255,
-        # Must match the bank's registered name for compliance.
-    )
-    account_number = models.CharField(
-        max_length=20,
-        # Stored as string to preserve leading zeros.
-    )
-    ifsc_code = models.CharField(
-        max_length=11,
-        # Standard Indian IFSC: 4 alpha + 0 + 6 alphanumeric.
-    )
-    is_default = models.BooleanField(
-        default=False,
-        # Convenience flag for selecting the primary payout destination.
-    )
-    is_verified = models.BooleanField(
-        default=False,
-        # Only verified accounts should be eligible for payouts.
-    )
-    created_at = models.DateTimeField(default=timezone.now)
+    id                  = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    merchant            = models.ForeignKey(Merchant, on_delete=models.PROTECT, related_name='bank_accounts')
+    account_holder_name = models.CharField(max_length=255)
+    account_number      = models.CharField(max_length=20)  # stored as string to preserve leading zeros
+    ifsc_code           = models.CharField(max_length=11)
+    is_default          = models.BooleanField(default=False)
+    is_verified         = models.BooleanField(default=False)
+    created_at          = models.DateTimeField(default=timezone.now)
 
     class Meta:
         db_table = 'bank_accounts'
-        # (merchant, account_number) must be unique — same merchant cannot
-        # register the same account twice.
         unique_together = [('merchant', 'account_number')]
         indexes = [
             models.Index(fields=['merchant'], name='idx_bankaccount_merchant'),
@@ -147,57 +77,30 @@ class BankAccount(models.Model):
         return f"BankAccount({self.account_number}, {self.ifsc_code})"
 
 
-# ---------------------------------------------------------------------------
-# LedgerEntry (Immutable Append-Only)
-# ---------------------------------------------------------------------------
-
 class LedgerEntry(models.Model):
     """
-    Immutable double-entry bookkeeping record.
-    NEVER update or delete a row — only append.
-    The merchant's current balance = SUM(CREDIT amounts) - SUM(DEBIT amounts).
+    Immutable, append-only double-entry bookkeeping record.
 
-    Immutability is enforced via overriding save() below.
+    Never update or delete a row — only append new ones. The merchant's
+    current balance is always computed as SUM(CREDIT amounts) - SUM(DEBIT amounts).
+
+    balance_after is a running snapshot for point-in-time statement generation
+    and does not replace the aggregate as the authoritative balance source.
     """
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-    )
-    merchant = models.ForeignKey(
-        Merchant,
-        on_delete=models.PROTECT,
-        related_name='ledger_entries',
-    )
-    payout = models.ForeignKey(
+    id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    merchant     = models.ForeignKey(Merchant, on_delete=models.PROTECT, related_name='ledger_entries')
+    payout       = models.ForeignKey(
         'Payout',
         on_delete=models.PROTECT,
         related_name='ledger_entries',
         null=True,
         blank=True,
-        # Nullable: some entries (e.g., top-ups) are not tied to a payout.
     )
-    entry_type = models.CharField(
-        max_length=10,
-        choices=LedgerEntryType.choices,
-    )
-    amount = models.BigIntegerField(
-        # Always in paise (1 INR = 100 paise) to avoid floating-point errors.
-        # BigIntegerField handles values up to 9,223,372,036,854,775,807 paise.
-    )
-    balance_after = models.BigIntegerField(
-        # Snapshot of the merchant's running balance after this entry.
-        # Useful for point-in-time audits without re-summing the entire ledger.
-    )
-    description = models.TextField(
-        blank=True,
-        # Human-readable reason for the entry (e.g., "Payout to HDFC XXXXX").
-    )
-    created_at = models.DateTimeField(
-        default=timezone.now,
-        db_index=True,
-        # Indexed for range queries when generating statements.
-    )
+    entry_type   = models.CharField(max_length=10, choices=LedgerEntryType.choices)
+    amount       = models.BigIntegerField()  # always in paise; BigInteger avoids float drift
+    balance_after = models.BigIntegerField()
+    description  = models.TextField(blank=True)
+    created_at   = models.DateTimeField(default=timezone.now, db_index=True)
 
     class Meta:
         db_table = 'ledger_entries'
@@ -209,93 +112,43 @@ class LedgerEntry(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        """
-        Enforce immutability: a LedgerEntry can be created but never updated.
-        """
         if self.pk and LedgerEntry.objects.filter(pk=self.pk).exists():
             raise ValueError("LedgerEntry is immutable and cannot be updated.")
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        """Prevent deletion of ledger entries."""
         raise ValueError("LedgerEntry is immutable and cannot be deleted.")
 
     def __str__(self):
         return f"LedgerEntry({self.entry_type}, {self.amount} paise, merchant={self.merchant_id})"
 
 
-# ---------------------------------------------------------------------------
-# Payout (State Machine)
-# ---------------------------------------------------------------------------
-
 class Payout(models.Model):
     """
-    Represents a single payout instruction.
-    Status transitions are enforced at the service layer, not the DB,
-    to keep the model thin. Only valid transitions:
-      PENDING → PROCESSING → COMPLETED | FAILED
-      PENDING → CANCELLED
+    A single payout instruction from a merchant to their bank account.
+
+    Valid state transitions (enforced at the service layer via guarded UPDATEs):
+        PENDING → PROCESSING → COMPLETED
+                             → FAILED
+        PENDING → CANCELLED
     """
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-    )
-    merchant = models.ForeignKey(
-        Merchant,
-        on_delete=models.PROTECT,
-        related_name='payouts',
-    )
-    bank_account = models.ForeignKey(
-        BankAccount,
-        on_delete=models.PROTECT,
-        related_name='payouts',
-        # PROTECT: retain historical records even if account is removed.
-    )
-    amount = models.BigIntegerField(
-        # In paise. Must be positive — enforced via model clean().
-    )
-    mode = models.CharField(
-        max_length=10,
-        choices=PayoutMode.choices,
-        default=PayoutMode.IMPS,
-        # Transfer rail; determines routing and SLA.
-    )
-    status = models.CharField(
-        max_length=20,
-        choices=PayoutStatus.choices,
-        default=PayoutStatus.PENDING,
-        db_index=True,
-        # Indexed — queries like "all PENDING payouts" are very frequent.
-    )
-    reference_id = models.CharField(
-        max_length=255,
-        blank=True,
-        null=True,
-        # External UTR / transaction ID returned by the payment gateway.
-    )
-    failure_reason = models.TextField(
-        blank=True,
-        null=True,
-        # Populated when status = FAILED; useful for debugging and merchant comms.
-    )
+    id             = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    merchant       = models.ForeignKey(Merchant, on_delete=models.PROTECT, related_name='payouts')
+    bank_account   = models.ForeignKey(BankAccount, on_delete=models.PROTECT, related_name='payouts')
+    amount         = models.BigIntegerField()
+    mode           = models.CharField(max_length=10, choices=PayoutMode.choices, default=PayoutMode.IMPS)
+    status         = models.CharField(max_length=20, choices=PayoutStatus.choices, default=PayoutStatus.PENDING, db_index=True)
+    reference_id   = models.CharField(max_length=255, blank=True, null=True)
+    failure_reason = models.TextField(blank=True, null=True)
     idempotency_key = models.OneToOneField(
         'IdempotencyKey',
         on_delete=models.PROTECT,
         related_name='payout',
         null=True,
         blank=True,
-        # OneToOne: each idempotency key maps to exactly one payout.
     )
-    initiated_at = models.DateTimeField(
-        default=timezone.now,
-        # When the payout request was accepted.
-    )
-    processed_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        # Set when status moves to COMPLETED or FAILED.
-    )
+    initiated_at = models.DateTimeField(default=timezone.now)
+    processed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'payouts'
@@ -316,59 +169,25 @@ class Payout(models.Model):
         return f"Payout({self.id}, {self.amount} paise, {self.status})"
 
 
-# ---------------------------------------------------------------------------
-# IdempotencyKey
-# ---------------------------------------------------------------------------
-
 class IdempotencyKey(models.Model):
     """
-    Ensures that duplicate API requests (retries, network failures) do not
-    result in duplicate payouts. The client generates a unique key per
-    intended operation and re-uses it on retry.
+    Guards against duplicate payout requests caused by network retries.
 
-    Key is unique per merchant: two merchants may use the same key string
-    without collision, but the same merchant cannot reuse a key.
+    The client generates one key per intended operation and sends it in the
+    Idempotency-Key header. On retry, the exact same key is reused.
+    Scoped per merchant — two merchants may share the same key string.
     """
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-    )
-    merchant = models.ForeignKey(
-        Merchant,
-        on_delete=models.PROTECT,
-        related_name='idempotency_keys',
-    )
-    key = models.CharField(
-        max_length=255,
-        # The client-supplied key (e.g., a UUID or order ID).
-    )
-    request_hash = models.CharField(
-        max_length=64,
-        # SHA-256 hash of the original request payload.
-        # On retry, we verify the hash matches to detect conflicting requests.
-    )
-    response_status = models.IntegerField(
-        null=True,
-        blank=True,
-        # HTTP status code of the response returned for the original request.
-        # Replayed on duplicate requests.
-    )
-    response_body = models.JSONField(
-        null=True,
-        blank=True,
-        # Full response body stored so duplicates get the exact same response.
-    )
-    created_at = models.DateTimeField(default=timezone.now)
-    expires_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        # Optional TTL; stale keys can be pruned by a Celery periodic task.
-    )
+    id             = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    merchant       = models.ForeignKey(Merchant, on_delete=models.PROTECT, related_name='idempotency_keys')
+    key            = models.CharField(max_length=255)
+    request_hash   = models.CharField(max_length=64)  # SHA-256 of request body; detects conflicting retries
+    response_status = models.IntegerField(null=True, blank=True)
+    response_body  = models.JSONField(null=True, blank=True)
+    created_at     = models.DateTimeField(default=timezone.now)
+    expires_at     = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'idempotency_keys'
-        # Core uniqueness constraint: (merchant, key) must be unique.
         unique_together = [('merchant', 'key')]
         indexes = [
             models.Index(fields=['merchant', 'key'], name='idx_idempotency_merchant_key'),
