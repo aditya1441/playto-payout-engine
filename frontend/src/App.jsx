@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { RefreshCw, ArrowUpRight, DollarSign, Activity, CheckCircle2, Clock, XCircle, Wallet, Lock, ListTodo, FileText, Sparkles, Send, ChevronRight } from 'lucide-react';
+import { RefreshCw, ArrowUpRight, Activity, CheckCircle2, Clock, XCircle, Wallet, Lock, ListTodo, FileText, Sparkles, Send, ChevronRight, IndianRupee, LayoutDashboard, Settings, Bell, Search, CreditCard, ArrowDownLeft } from 'lucide-react';
 
 const MERCHANT_ID = "00000000-0000-0000-0000-000000000001";
 const BANK_ACCOUNT_ID = "00000000-0000-0000-0000-000000000010";
@@ -86,7 +86,7 @@ function App() {
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to create payout");
+      if (!res.ok) throw new Error(data.error || "Failed to initiate payout");
       
       setAmount('');
       setSuccess(true);
@@ -102,204 +102,262 @@ function App() {
   const getStatusBadge = (status) => {
     switch (status) {
       case 'COMPLETED': 
-        return <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-medium border border-emerald-500/20"><CheckCircle2 className="w-3 h-3"/> Settled</span>;
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E8F8EE] text-[#059669] text-xs font-bold tracking-wide uppercase"><CheckCircle2 className="w-3.5 h-3.5"/> Settled</span>;
       case 'FAILED': 
-        return <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-500/10 text-rose-400 text-xs font-medium border border-rose-500/20"><XCircle className="w-3 h-3"/> Failed</span>;
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FEE2E2] text-[#DC2626] text-xs font-bold tracking-wide uppercase"><XCircle className="w-3.5 h-3.5"/> Failed</span>;
       case 'PROCESSING': 
-        return <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-400 text-xs font-medium border border-blue-500/20"><RefreshCw className="w-3 h-3 animate-spin"/> Processing</span>;
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E0E7FF] text-[#4F46E5] text-xs font-bold tracking-wide uppercase"><RefreshCw className="w-3.5 h-3.5 animate-spin"/> Processing</span>;
       default: 
-        return <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-zinc-500/10 text-zinc-400 text-xs font-medium border border-zinc-500/20"><Clock className="w-3 h-3"/> Pending</span>;
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F3F4F6] text-[#4B5563] text-xs font-bold tracking-wide uppercase"><Clock className="w-3.5 h-3.5"/> Pending</span>;
     }
   };
 
   return (
-    <div className="min-h-screen bg-black text-white selection:bg-blue-500/30 overflow-hidden relative font-sans">
+    <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A] flex font-sans selection:bg-[#4F46E5]/20">
       
-      {/* Background ambient light effects mimicking Apple's dark mode blurs */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-indigo-600/20 blur-[120px] pointer-events-none mix-blend-screen" />
-      <div className="absolute bottom-[-10%] right-[-5%] w-[30%] h-[40%] rounded-full bg-blue-600/10 blur-[120px] pointer-events-none mix-blend-screen" />
-      
-      <div className="max-w-6xl mx-auto p-6 md:p-10 relative z-10">
-        <header className="flex items-center justify-between mb-12">
+      {/* Sidebar - Desktop */}
+      <div className="hidden lg:flex flex-col w-72 bg-white border-r border-[#E2E8F0] px-6 py-8 fixed h-full z-20">
+        <div className="flex items-center gap-3 mb-12">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#4F46E5] to-[#8B5CF6] flex items-center justify-center shadow-lg shadow-[#4F46E5]/30">
+            <Sparkles className="text-white w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-[#0F172A]">Playto</h1>
+            <p className="text-[#64748B] text-xs font-bold tracking-widest uppercase">Business</p>
+          </div>
+        </div>
+
+        <nav className="space-y-2 flex-1">
+          <a href="#" className="flex items-center gap-3 px-4 py-3.5 bg-[#EEF2FF] text-[#4F46E5] rounded-2xl font-semibold transition-all">
+            <LayoutDashboard className="w-5 h-5" /> Dashboard
+          </a>
+          <a href="#" className="flex items-center gap-3 px-4 py-3.5 text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#0F172A] rounded-2xl font-semibold transition-all">
+            <ListTodo className="w-5 h-5" /> Transactions
+          </a>
+          <a href="#" className="flex items-center gap-3 px-4 py-3.5 text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#0F172A] rounded-2xl font-semibold transition-all">
+            <FileText className="w-5 h-5" /> Statements
+          </a>
+          <a href="#" className="flex items-center gap-3 px-4 py-3.5 text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#0F172A] rounded-2xl font-semibold transition-all">
+            <Settings className="w-5 h-5" /> Settings
+          </a>
+        </nav>
+
+        <div className="mt-auto bg-[#F8FAFC] rounded-2xl p-4 border border-[#E2E8F0]">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-zinc-800 to-zinc-700 flex items-center justify-center border border-white/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)]">
-              <Sparkles className="text-white w-6 h-6" />
+            <div className="w-10 h-10 rounded-full bg-[#4F46E5] text-white flex items-center justify-center font-bold text-sm">
+              AF
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-white to-white/70">Playto Pay</h1>
-              <p className="text-zinc-500 text-sm font-medium">Merchant Dashboard</p>
+              <p className="text-sm font-bold text-[#0F172A]">Acme Freelance</p>
+              <p className="text-xs text-[#64748B] font-medium">Merchant ID: ...0001</p>
             </div>
           </div>
-          <button 
-            onClick={fetchData} 
-            className={`p-2.5 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 transition-all ${polling ? 'animate-spin border-blue-500/50 text-blue-400' : 'text-zinc-400 hover:text-white'}`}
-          >
-            <RefreshCw className="w-5 h-5" />
-          </button>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 lg:ml-72 flex flex-col min-h-screen">
+        
+        {/* Header */}
+        <header className="bg-white/80 backdrop-blur-xl border-b border-[#E2E8F0] sticky top-0 z-10 px-8 py-5 flex items-center justify-between">
+          <div className="flex items-center gap-4 flex-1">
+            <div className="relative w-96 hidden md:block">
+              <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-[#94A3B8]" />
+              <input type="text" placeholder="Search transactions, UTRs..." className="w-full bg-[#F1F5F9] border-none rounded-xl py-2.5 pl-10 pr-4 text-[#0F172A] placeholder:text-[#94A3B8] focus:ring-2 focus:ring-[#4F46E5]/20 focus:outline-none font-medium" />
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <button className="relative p-2.5 rounded-full hover:bg-[#F1F5F9] transition-colors text-[#64748B]">
+              <Bell className="w-6 h-6" />
+              <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-[#EF4444] rounded-full border-2 border-white"></span>
+            </button>
+            <button 
+              onClick={fetchData} 
+              className={`p-2.5 rounded-full hover:bg-[#F1F5F9] transition-all ${polling ? 'text-[#4F46E5]' : 'text-[#64748B]'}`}
+            >
+              <RefreshCw className={`w-6 h-6 ${polling ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
-          {/* Left Column: Balance Card & Action Form */}
-          <div className="lg:col-span-5 flex flex-col gap-6">
+        <main className="flex-1 p-8 overflow-y-auto">
+          <div className="max-w-6xl mx-auto space-y-8">
             
-            {/* Apple Card Style Balance Widget */}
-            <div className="relative overflow-hidden rounded-3xl p-8 bg-gradient-to-br from-zinc-900 to-black border border-white/10 shadow-2xl group">
-              <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/noise-pattern-with-subtle-cross-lines.png')] opacity-[0.03] mix-blend-overlay"></div>
+            {/* Top Cards Row */}
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
               
-              <div className="relative z-10 flex flex-col h-full justify-between gap-8">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <div className="flex items-center gap-2 text-zinc-400 mb-2">
-                      <Wallet className="w-4 h-4" />
-                      <span className="font-medium text-sm tracking-wide">Available Balance</span>
+              {/* Vibrant Wallet Card */}
+              <div className="xl:col-span-7">
+                <div className="relative overflow-hidden rounded-[2rem] p-8 shadow-2xl shadow-[#4F46E5]/20 h-full flex flex-col justify-between"
+                     style={{ background: 'linear-gradient(135deg, #1E1B4B 0%, #4338CA 100%)' }}>
+                  
+                  {/* Decorative Orbs */}
+                  <div className="absolute -top-24 -right-24 w-64 h-64 bg-[#EC4899] rounded-full blur-[80px] opacity-40 mix-blend-screen"></div>
+                  <div className="absolute -bottom-24 -left-24 w-64 h-64 bg-[#06B6D4] rounded-full blur-[80px] opacity-40 mix-blend-screen"></div>
+                  
+                  <div className="relative z-10">
+                    <div className="flex justify-between items-start mb-12">
+                      <div>
+                        <div className="flex items-center gap-2 text-white/70 mb-2">
+                          <Wallet className="w-5 h-5" />
+                          <span className="font-semibold tracking-wider uppercase text-sm">Main Account Balance</span>
+                        </div>
+                        <div className="text-5xl md:text-6xl font-black text-white flex items-baseline gap-1 tracking-tight">
+                          <span className="text-3xl text-white/60 font-semibold mr-1">₹</span>
+                          {loading ? '---' : (balance / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </div>
+                      </div>
+                      <div className="bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/20 shadow-xl">
+                        <IndianRupee className="w-8 h-8 text-white" />
+                      </div>
                     </div>
-                    <div className="text-5xl font-bold tracking-tighter text-white flex items-baseline gap-1">
-                      <span className="text-zinc-500 font-medium text-3xl">₹</span>
-                      {loading ? '---' : (balance / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    
+                    <div className="flex items-center gap-8 pt-6 border-t border-white/20">
+                      <div>
+                        <p className="text-white/60 text-xs font-bold uppercase tracking-widest mb-1">Held in Escrow</p>
+                        <p className="text-white font-bold text-xl flex items-baseline gap-1">
+                          <span className="text-white/60 text-sm">₹</span>
+                          {loading ? '---' : (heldBalance / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </p>
+                      </div>
+                      <div className="h-10 w-[1px] bg-white/20"></div>
+                      <div>
+                        <p className="text-white/60 text-xs font-bold uppercase tracking-widest mb-1">Account Status</p>
+                        <p className="text-[#34D399] font-bold text-lg flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4" /> Verified
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
-                
-                <div className="pt-5 border-t border-white/10 flex justify-between items-center">
-                  <div>
-                    <div className="flex items-center gap-1.5 text-zinc-500 mb-1">
-                      <Lock className="w-3.5 h-3.5" />
-                      <span className="font-medium text-xs uppercase tracking-wider">Held Funds</span>
+              </div>
+
+              {/* Action Form */}
+              <div className="xl:col-span-5">
+                <div className="bg-white rounded-[2rem] p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-[#E2E8F0] h-full relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#4F46E5] via-[#EC4899] to-[#F59E0B]"></div>
+                  
+                  <h2 className="text-xl font-extrabold text-[#0F172A] mb-8 flex items-center gap-3">
+                    <div className="p-2 bg-[#EEF2FF] text-[#4F46E5] rounded-xl"><Send className="w-5 h-5" /></div>
+                    Quick Transfer
+                  </h2>
+                  
+                  <form onSubmit={handlePayout} className="space-y-6">
+                    <div>
+                      <label className="block text-sm font-bold text-[#475569] mb-2 uppercase tracking-wide">Transfer Amount</label>
+                      <div className="relative flex items-center">
+                        <div className="absolute left-5 text-[#94A3B8] font-bold text-xl">₹</div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="1"
+                          value={amount}
+                          onChange={(e) => setAmount(e.target.value)}
+                          className="w-full bg-[#F8FAFC] border-2 border-[#E2E8F0] rounded-2xl py-4 pl-12 pr-4 text-[#0F172A] placeholder:text-[#CBD5E1] focus:outline-none focus:border-[#4F46E5] focus:ring-4 focus:ring-[#4F46E5]/10 transition-all text-2xl font-black"
+                          placeholder="0.00"
+                        />
+                      </div>
                     </div>
-                    <div className="text-xl font-semibold text-zinc-300 flex items-baseline gap-1">
-                      <span className="text-zinc-600 text-sm">₹</span>
-                      {loading ? '---' : (heldBalance / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+
+                    <div>
+                      <label className="block text-sm font-bold text-[#475569] mb-2 uppercase tracking-wide">Network Selection</label>
+                      <div className="relative">
+                        <select 
+                          value={mode} 
+                          onChange={(e) => setMode(e.target.value)}
+                          className="w-full bg-[#F8FAFC] border-2 border-[#E2E8F0] rounded-2xl py-4 px-5 text-[#0F172A] appearance-none focus:outline-none focus:border-[#4F46E5] focus:ring-4 focus:ring-[#4F46E5]/10 transition-all font-bold text-lg cursor-pointer"
+                        >
+                          <option value="IMPS">IMPS (Instant)</option>
+                          <option value="NEFT">NEFT (Batch Processing)</option>
+                          <option value="RTGS">RTGS (High Value)</option>
+                          <option value="UPI">UPI (Fast Network)</option>
+                        </select>
+                        <div className="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none bg-white p-1 rounded-md shadow-sm border border-[#E2E8F0]">
+                          <ChevronRight className="w-5 h-5 text-[#64748B] rotate-90" />
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="h-10 w-10 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:bg-white/10 transition-colors">
-                    <Activity className="w-5 h-5 text-zinc-400" />
-                  </div>
+
+                    {error && (
+                      <div className="p-4 bg-[#FEF2F2] border border-[#FECACA] rounded-2xl text-[#DC2626] text-sm font-bold flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+                        <XCircle className="w-5 h-5 shrink-0" />
+                        {error}
+                      </div>
+                    )}
+
+                    {success && (
+                      <div className="p-4 bg-[#F0FDF4] border border-[#BBF7D0] rounded-2xl text-[#16A34A] text-sm font-bold flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+                        <CheckCircle2 className="w-5 h-5 shrink-0" />
+                        Transfer initiated successfully!
+                      </div>
+                    )}
+
+                    <button 
+                      type="submit" 
+                      disabled={submitting}
+                      className="w-full bg-[#0F172A] hover:bg-[#1E293B] text-white active:scale-[0.98] transition-all py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 disabled:opacity-50 disabled:pointer-events-none shadow-xl shadow-[#0F172A]/20 mt-4 group"
+                    >
+                      {submitting ? (
+                        <><RefreshCw className="w-6 h-6 animate-spin" /> Authorizing via Bank...</>
+                      ) : (
+                        <>Pay Now <ArrowUpRight className="w-6 h-6 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" /></>
+                      )}
+                    </button>
+                  </form>
                 </div>
               </div>
             </div>
 
-            {/* Premium Payout Form */}
-            <div className="bg-zinc-900/50 backdrop-blur-xl border border-white/10 rounded-3xl p-7 shadow-xl">
-              <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 text-zinc-100">
-                <Send className="w-5 h-5 text-blue-400" />
-                Send Payout
-              </h2>
-              
-              <form onSubmit={handlePayout} className="space-y-5">
-                <div>
-                  <label className="block text-sm font-medium text-zinc-400 mb-2">Amount</label>
-                  <div className="relative flex items-center">
-                    <div className="absolute left-4 text-zinc-500 font-medium">₹</div>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="1"
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
-                      className="w-full bg-black/50 border border-white/10 rounded-2xl py-3.5 pl-9 pr-4 text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all text-lg font-medium"
-                      placeholder="0.00"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-zinc-400 mb-2">Network</label>
-                  <div className="relative">
-                    <select 
-                      value={mode} 
-                      onChange={(e) => setMode(e.target.value)}
-                      className="w-full bg-black/50 border border-white/10 rounded-2xl py-3.5 px-4 text-white appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all font-medium"
-                    >
-                      <option value="IMPS">IMPS (Instant Transfer)</option>
-                      <option value="NEFT">NEFT (Standard Batch)</option>
-                      <option value="RTGS">RTGS (High Value)</option>
-                      <option value="UPI">UPI (Fast Network)</option>
-                    </select>
-                    <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
-                      <ChevronRight className="w-5 h-5 text-zinc-500 rotate-90" />
-                    </div>
-                  </div>
-                </div>
-
-                {error && (
-                  <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-400 text-sm flex items-center gap-2">
-                    <XCircle className="w-4 h-4 shrink-0" />
-                    {error}
-                  </div>
-                )}
-
-                {success && (
-                  <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl text-emerald-400 text-sm flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 shrink-0" />
-                    Payout initiated successfully.
-                  </div>
-                )}
-
-                <button 
-                  type="submit" 
-                  disabled={submitting}
-                  className="w-full bg-white text-black hover:bg-zinc-200 active:scale-[0.98] transition-all py-3.5 rounded-2xl font-semibold text-[15px] flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none shadow-[0_0_20px_rgba(255,255,255,0.1)] mt-2"
-                >
-                  {submitting ? (
-                    <><RefreshCw className="w-5 h-5 animate-spin" /> Authorizing...</>
-                  ) : (
-                    <>Confirm Payout</>
-                  )}
-                </button>
-              </form>
-            </div>
-          </div>
-
-          {/* Right Column: History & Ledger Tabs */}
-          <div className="lg:col-span-7 flex flex-col h-[700px]">
-            <div className="bg-zinc-900/40 backdrop-blur-2xl border border-white/10 rounded-3xl flex flex-col h-full shadow-2xl overflow-hidden">
-              
-              <div className="flex border-b border-white/10 p-2 gap-2 bg-zinc-950/50">
+            {/* Bottom Section: Tabs & List */}
+            <div className="bg-white rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-[#E2E8F0] overflow-hidden">
+              <div className="flex border-b border-[#E2E8F0] bg-[#F8FAFC] p-2 gap-2">
                 <button 
                   onClick={() => setActiveTab('payouts')}
-                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-medium text-sm transition-all ${activeTab === 'payouts' ? 'bg-zinc-800 text-white shadow-sm border border-white/5' : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'}`}
+                  className={`flex-1 flex items-center justify-center gap-3 py-4 rounded-xl font-bold transition-all ${activeTab === 'payouts' ? 'bg-white text-[#4F46E5] shadow-sm border border-[#E2E8F0]' : 'text-[#64748B] hover:text-[#0F172A] hover:bg-white/50'}`}
                 >
-                  <ListTodo className="w-4 h-4" /> Activity
+                  <ListTodo className="w-5 h-5" /> Recent Activity
                 </button>
                 <button 
                   onClick={() => setActiveTab('ledger')}
-                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-medium text-sm transition-all ${activeTab === 'ledger' ? 'bg-zinc-800 text-white shadow-sm border border-white/5' : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'}`}
+                  className={`flex-1 flex items-center justify-center gap-3 py-4 rounded-xl font-bold transition-all ${activeTab === 'ledger' ? 'bg-white text-[#4F46E5] shadow-sm border border-[#E2E8F0]' : 'text-[#64748B] hover:text-[#0F172A] hover:bg-white/50'}`}
                 >
-                  <FileText className="w-4 h-4" /> Statements
+                  <FileText className="w-5 h-5" /> Official Statements
                 </button>
               </div>
               
-              <div className="flex-1 overflow-y-auto p-2 scrollbar-hide">
+              <div className="p-6">
                 {loading ? (
-                  <div className="flex items-center justify-center h-full text-zinc-500">
-                    <RefreshCw className="w-6 h-6 animate-spin opacity-50" />
+                  <div className="py-20 flex flex-col items-center justify-center text-[#94A3B8] gap-4">
+                    <RefreshCw className="w-10 h-10 animate-spin text-[#CBD5E1]" />
+                    <p className="font-bold">Syncing with ledger...</p>
                   </div>
                 ) : activeTab === 'payouts' ? (
                   payouts.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full text-zinc-500 gap-3">
-                      <div className="w-16 h-16 rounded-full bg-zinc-800/50 flex items-center justify-center border border-white/5">
-                        <Activity className="w-8 h-8 opacity-40" />
+                    <div className="py-24 flex flex-col items-center justify-center text-[#94A3B8] gap-4">
+                      <div className="w-20 h-20 rounded-full bg-[#F1F5F9] flex items-center justify-center border-4 border-white shadow-sm">
+                        <Activity className="w-10 h-10 text-[#CBD5E1]" />
                       </div>
-                      <p className="font-medium">No recent activity</p>
+                      <p className="font-bold text-lg">No transfers yet</p>
                     </div>
                   ) : (
-                    <div className="space-y-1">
+                    <div className="space-y-4">
                       {payouts.map(p => (
-                        <div key={p.id} className="p-4 rounded-2xl hover:bg-white/5 transition-colors flex items-center justify-between group cursor-default">
-                          <div className="flex items-center gap-4">
-                            <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/10 flex items-center justify-center text-zinc-400">
-                              <ArrowUpRight className="w-5 h-5" />
+                        <div key={p.id} className="p-5 rounded-2xl bg-white border border-[#E2E8F0] hover:shadow-md hover:border-[#CBD5E1] transition-all flex items-center justify-between group">
+                          <div className="flex items-center gap-5">
+                            <div className="w-12 h-12 rounded-full bg-[#EEF2FF] text-[#4F46E5] flex items-center justify-center font-bold">
+                              <ArrowUpRight className="w-6 h-6" />
                             </div>
                             <div>
-                              <div className="font-medium text-zinc-100">Bank Withdrawal</div>
-                              <div className="text-xs text-zinc-500 mt-0.5">
-                                {new Date(p.initiated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              <div className="font-extrabold text-[#0F172A] text-lg">Bank Transfer</div>
+                              <div className="text-sm font-bold text-[#64748B] mt-1 flex items-center gap-2">
+                                <span>{new Date(p.initiated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                                <span className="w-1 h-1 bg-[#CBD5E1] rounded-full"></span>
+                                <span className="px-2 py-0.5 bg-[#F1F5F9] text-[#475569] rounded-md text-xs uppercase tracking-wider">{p.mode}</span>
                               </div>
                             </div>
                           </div>
-                          <div className="flex flex-col items-end gap-1.5">
-                            <div className="font-semibold text-white tracking-tight">
+                          <div className="flex flex-col items-end gap-2">
+                            <div className="font-black text-[#0F172A] text-xl tracking-tight">
                               -₹{(p.amount / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                             </div>
                             {getStatusBadge(p.status)}
@@ -310,30 +368,32 @@ function App() {
                   )
                 ) : (
                   ledger.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full text-zinc-500 gap-3">
-                      <div className="w-16 h-16 rounded-full bg-zinc-800/50 flex items-center justify-center border border-white/5">
-                        <FileText className="w-8 h-8 opacity-40" />
+                    <div className="py-24 flex flex-col items-center justify-center text-[#94A3B8] gap-4">
+                      <div className="w-20 h-20 rounded-full bg-[#F1F5F9] flex items-center justify-center border-4 border-white shadow-sm">
+                        <FileText className="w-10 h-10 text-[#CBD5E1]" />
                       </div>
-                      <p className="font-medium">No statements available</p>
+                      <p className="font-bold text-lg">Ledger is empty</p>
                     </div>
                   ) : (
-                    <div className="space-y-1">
+                    <div className="space-y-4">
                       {ledger.map(entry => (
-                        <div key={entry.id} className="p-4 rounded-2xl hover:bg-white/5 transition-colors flex justify-between items-center group cursor-default">
-                          <div className="flex items-center gap-4">
-                            <div className={`w-2 h-2 rounded-full ${entry.type === 'CREDIT' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]' : 'bg-zinc-600'}`} />
+                        <div key={entry.id} className="p-5 rounded-2xl bg-white border border-[#E2E8F0] hover:shadow-md hover:border-[#CBD5E1] transition-all flex items-center justify-between group">
+                          <div className="flex items-center gap-5">
+                            <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold ${entry.type === 'CREDIT' ? 'bg-[#E8F8EE] text-[#059669]' : 'bg-[#F1F5F9] text-[#64748B]'}`}>
+                              {entry.type === 'CREDIT' ? <ArrowDownLeft className="w-6 h-6" /> : <ArrowUpRight className="w-6 h-6" />}
+                            </div>
                             <div>
-                              <div className="font-medium text-zinc-200 text-sm">{entry.description}</div>
-                              <div className="text-xs text-zinc-500 mt-0.5">
+                              <div className="font-extrabold text-[#0F172A] text-base">{entry.description}</div>
+                              <div className="text-sm font-bold text-[#64748B] mt-1">
                                 {new Date(entry.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                               </div>
                             </div>
                           </div>
                           <div className="text-right">
-                            <div className={`font-semibold tracking-tight ${entry.type === 'CREDIT' ? 'text-emerald-400' : 'text-white'}`}>
+                            <div className={`font-black text-xl tracking-tight ${entry.type === 'CREDIT' ? 'text-[#059669]' : 'text-[#0F172A]'}`}>
                               {entry.type === 'CREDIT' ? '+' : '-'}₹{(entry.amount / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                             </div>
-                            <div className="text-xs text-zinc-500 mt-0.5">
+                            <div className="text-xs font-bold text-[#94A3B8] mt-1 uppercase tracking-wider">
                               Bal: ₹{(entry.balance_after / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                             </div>
                           </div>
@@ -345,7 +405,7 @@ function App() {
               </div>
             </div>
           </div>
-        </div>
+        </main>
       </div>
     </div>
   );
