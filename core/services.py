@@ -207,7 +207,12 @@ def create_payout(
         store_idempotency_response(idempotency_result.idempotency_key, 201, response_data)
 
         from .tasks import process_payout
-        transaction.on_commit(lambda: process_payout.apply_async(args=[str(payout.id)]))
+        def _dispatch():
+            try:
+                process_payout.apply_async(args=[str(payout.id)])
+            except Exception:
+                process_payout(str(payout.id))
+        transaction.on_commit(_dispatch)
 
         return PayoutResult(is_replay=False, status_code=201, data=response_data)
 
