@@ -77,10 +77,10 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_DIRS = [BASE_DIR / 'frontend' / 'dist' / 'assets']
+STATICFILES_DIRS = [BASE_DIR / 'frontend' / 'dist']
 STORAGES = {
     'staticfiles': {
-        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+        'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage',
     },
 }
 
