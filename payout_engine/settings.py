@@ -4,9 +4,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-only-change-in-production')
-
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1')
-
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 
 INSTALLED_APPS = [
@@ -53,9 +51,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'payout_engine.wsgi.application'
 
-# Database — uses DATABASE_URL in production (Railway auto-sets this)
 import dj_database_url
-
 DATABASES = {
     'default': dj_database_url.config(
         default=os.environ.get('DATABASE_URL', 'postgres://payout_user:password@localhost:5432/payout_db'),
@@ -75,8 +71,13 @@ TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
+# Static files: Vite builds with base='/static/', so index.html references /static/assets/xxx.js
+# collectstatic copies frontend/dist contents into staticfiles/
+# WhiteNoise serves staticfiles/ at /static/
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [BASE_DIR / 'frontend' / 'dist']
+WHITENOISE_ROOT = None
 STORAGES = {
     'staticfiles': {
         'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage',
@@ -94,7 +95,6 @@ REST_FRAMEWORK = {
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-# Celery
 CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = os.environ.get('REDIS_URL', 'redis://localhost:6379/1')
 CELERY_ACCEPT_CONTENT = ['json']
@@ -108,7 +108,6 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_RESULT_EXPIRES = 86400
 
 from celery.schedules import crontab
-
 CELERY_BEAT_SCHEDULE = {
     'retry-stuck-payouts': {
         'task': 'core.tasks.retry_stuck_payouts',
