@@ -150,3 +150,9 @@ cython_debug/
 
 # VS Code
 .vscode/
+
+# Deployment
+staticfiles/
+celerybeat-schedule.db
+node_modules/
+frontend/dist/

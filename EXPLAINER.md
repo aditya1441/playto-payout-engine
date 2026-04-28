@@ -1,81 +1,79 @@
-# Playto Payout Engine - Explainer
+# EXPLAINER
 
-### 1. The Ledger
+## 1. The Ledger
 
-**Balance Calculation Query:**
 ```python
-queryset = LedgerEntry.objects.filter(merchant_id=merchant_id).aggregate(
+result = LedgerEntry.objects.filter(merchant_id=merchant_id).aggregate(
     total_credits=Coalesce(
-        Sum(Case(When(entry_type=LedgerEntryType.CREDIT, then='amount'), default=Value(0), output_field=IntegerField())),
-        Value(0),
+        Sum(Case(When(entry_type=LedgerEntryType.CREDIT, then='amount'),
+            default=Value(0), output_field=BigIntegerField())),
+        Value(0), output_field=BigIntegerField(),
     ),
     total_debits=Coalesce(
-        Sum(Case(When(entry_type=LedgerEntryType.DEBIT, then='amount'), default=Value(0), output_field=IntegerField())),
-        Value(0),
+        Sum(Case(When(entry_type=LedgerEntryType.DEBIT, then='amount'),
+            default=Value(0), output_field=BigIntegerField())),
+        Value(0), output_field=BigIntegerField(),
     ),
 )
-balance = queryset['total_credits'] - queryset['total_debits']
+balance = result['total_credits'] - result['total_debits']
 ```
 
-**Why modeled this way?**
-I modeled the ledger as an append-only, immutable event log rather than just storing a mutable `balance` integer on the `Merchant` model. If you just update `merchant.balance -= amount`, concurrent requests can overwrite each other (lost updates), and there is no audit trail. By strictly deriving the balance from immutable `CREDIT` and `DEBIT` entries via DB-level `Sum` aggregations, the math is guaranteed to be historically accurate and mathematically immune to python-memory sync anomalies.
+Why this way: the balance is never stored as a mutable field. It's always derived from the append-only ledger via a DB-level `SUM`. This means there's no way for Python-side arithmetic bugs to silently corrupt the balance — the ledger *is* the source of truth. I used `BigIntegerField` as the output field because `IntegerField` would overflow at ~₹2.14 Cr in paise (32-bit signed int limit), which I caught during testing.
+
+Credits and debits are separate `LedgerEntry` rows rather than positive/negative amounts on one field. This makes the audit trail dead simple — you can query all debits or all credits independently, and every entry is immutable (the model blocks `save()` on existing rows and raises on `delete()`).
 
 ---
 
-### 2. The Lock
+## 2. The Lock
 
-**The Code:**
 ```python
 with transaction.atomic():
-    merchant = Merchant.objects.select_for_update().get(id=merchant_id)
-    current_balance = get_balance(merchant.id)
-    if current_balance < amount:
-        raise InsufficientFundsError("Insufficient balance")
-    # ... create PENDING payout and insert DEBIT ledger entry ...
+    merchant = Merchant.objects.select_for_update().get(id=merchant_id, is_active=True)
+    balance = get_balance(merchant_id)
+    if balance < amount:
+        raise InsufficientFundsError(...)
+    # create payout + debit ledger entry
 ```
 
-**Explanation of the Primitive:**
-This relies on the database's `SELECT ... FOR UPDATE` primitive. When Thread A requests a payout, the database physically locks that specific merchant's row. If Thread B attempts a concurrent payout for the exact same merchant at the exact same millisecond, Thread B is forced to wait until Thread A commits or rolls back its transaction. Once Thread A finishes and deducts the balance, Thread B acquires the lock, recalculates the *new* balance directly from the DB, and correctly rejects the request if funds are now insufficient.
+This is `SELECT ... FOR UPDATE` — a row-level exclusive lock in PostgreSQL. When two threads try to create payouts for the same merchant at the same time, the second thread physically blocks on the `select_for_update()` call until the first thread's transaction commits or rolls back. By the time thread B gets the lock, the balance has already been reduced by thread A's debit, so B's `get_balance()` call returns the updated value and correctly rejects if funds are insufficient.
+
+The key thing is that the balance check and the debit happen inside the same `transaction.atomic()` block while holding the lock. There's no gap between "check balance" and "deduct balance" where another thread could sneak in.
 
 ---
 
-### 3. The Idempotency
+## 3. The Idempotency
 
-**How it knows it has seen a key before:**
-Idempotency is enforced by a unique composite index at the database level: `UNIQUE(merchant_id, idempotency_key)`. When a request comes in, the system blindly attempts an `INSERT` into the `idempotency_keys` table. If the database throws an `IntegrityError`, we know the key exists. (We then check `created_at` to enforce the 24-hour expiry rule, and we compare a SHA-256 hash of the request payload to ensure the merchant isn't trying to change the payout amount on a retry).
+The `idempotency_keys` table has a `UNIQUE(merchant_id, key)` constraint. When a request comes in, I attempt a direct `INSERT`. If it succeeds, this is a new request. If the database throws `IntegrityError`, the key already exists — I fetch it and return the cached response.
 
-**What happens if the first request is in-flight when the second arrives?**
-The `IdempotencyKey` record is inserted with a default `response_status` of `202 Accepted`. If Thread B catches the `IntegrityError` while Thread A is still communicating with the database or the background worker hasn't finished, Thread B will fetch the existing key and return the `202 Accepted` status back to the client, effectively saying *"We received this exactly once, and it is currently processing."*
+I also hash the request body with SHA-256 and store it alongside the key. If a second request arrives with the same key but different payload (e.g., different amount), I reject it with a 409 Conflict. This prevents misuse where someone reuses a key to change the payout parameters.
+
+**If the first request is still in-flight:** the `IdempotencyKey` row exists but `response_status` and `response_body` are still `NULL`. When thread B hits the `IntegrityError` path and fetches the key, it sees `cached_response=None` and returns a 202, telling the client "we got it, still working on it, try again shortly."
+
+Keys are scoped per merchant and expire after 24 hours. Expired keys are cleaned up by a periodic Celery beat task rather than inline (deleting inline would create a TOCTOU race between concurrent requests).
 
 ---
 
-### 4. The State Machine
-
-**Where is failed-to-completed blocked?**
-It is blocked at the database layer using a Compare-And-Swap (CAS) update pattern. A payout can only be moved to `COMPLETED` or `FAILED` if it is currently in `PROCESSING`.
+## 4. The State Machine
 
 ```python
-def complete_payout(payout: Payout, reference_id: str) -> bool:
-    updated_rows = Payout.objects.filter(
-        id=payout.id,
-        status=PayoutStatus.PROCESSING  # <--- State check
-    ).update(
-        status=PayoutStatus.COMPLETED,
-        reference_id=reference_id
-    )
-    return updated_rows == 1
+def complete_payout(payout, reference_id):
+    rows = Payout.objects.filter(
+        id=payout.id, status=PayoutStatus.PROCESSING,
+    ).update(status=PayoutStatus.COMPLETED, ...)
+    return rows == 1
 ```
-Because this uses an `UPDATE ... WHERE status='PROCESSING'`, if a payout is already `FAILED`, `updated_rows` will be `0`. The transaction acts as a no-op, completely blocking illegal backwards or sideways state transitions.
+
+This is a compare-and-swap. The `WHERE status='PROCESSING'` clause means the update only applies if the payout is currently in `PROCESSING`. If it's already `FAILED` or `COMPLETED`, `rows` is 0 and nothing happens. Same pattern in `fail_payout()`. There's no code path where you can go backwards (e.g., `FAILED` → `COMPLETED` or `COMPLETED` → `PENDING`) because every transition function filters on the expected current status.
+
+The `fail_payout` function also wraps the state change and the fund reversal (CREDIT ledger entry) in a single `transaction.atomic()` with `select_for_update()` on the merchant row. If the process dies mid-way, the whole transaction rolls back — the payout stays in `PROCESSING` and the retry mechanism picks it up.
 
 ---
 
-### 5. The AI Audit
+## 5. The AI Audit
 
-**Subtly Wrong Code generated by AI:**
-When asked to implement idempotency, the AI generated this standard Django logic:
+When I asked the AI to implement idempotency, it gave me this:
 
 ```python
-# AI GENERATED CODE
 key_obj, created = IdempotencyKey.objects.get_or_create(
     merchant_id=merchant_id,
     key=idempotency_key
@@ -84,18 +82,22 @@ if not created:
     return key_obj.response_body
 ```
 
-**What I caught:**
-I immediately caught a massive **TOCTOU (Time-of-check to time-of-use) race condition**. Django's `get_or_create()` executes a `SELECT` first. If two identical requests hit the server at the exact same time, *both* threads will run `SELECT` and see that the key doesn't exist. Then, *both* threads will try to run `INSERT`. The database will throw an `IntegrityError` on the second thread, which Django handles internally by retrying the `SELECT`—but by that point, the business logic has already stepped on itself and both threads think they are creating a payout.
+The problem: `get_or_create` does a `SELECT` first, then `INSERT` if not found. Under concurrency, two threads can both run the `SELECT`, both see "not found", and both attempt `INSERT`. Django catches the resulting `IntegrityError` internally and retries with another `SELECT`, but by that point both threads have already passed the `if not created` check and are proceeding to create payouts. You end up with duplicate payouts.
 
-**What I replaced it with:**
-I scrapped `get_or_create` entirely and replaced it with a raw `transaction.atomic()` block that forces a direct `INSERT`, relying on the database's `IntegrityError` to dictate the control flow. This guarantees absolute atomic safety.
+What I replaced it with:
 
 ```python
-# MY REPLACEMENT CODE
 try:
-    with transaction.atomic():
-        key_obj = IdempotencyKey.objects.create(...)
-    return IdempotencyResult(created=True, ...)
+    key_obj = IdempotencyKey.objects.create(
+        merchant_id=merchant_id,
+        key=key,
+        request_hash=incoming_hash,
+        expires_at=expires_at,
+    )
+    return IdempotencyResult(created=True, idempotency_key=key_obj)
 except IntegrityError:
-    # Safely fetch the existing row and return cached response
+    key_obj = IdempotencyKey.objects.get(merchant_id=merchant_id, key=key)
+    # ... validate hash, check expiry, return cached response
 ```
+
+Straight `INSERT` first, let the DB constraint do the work. If it throws, we know the key exists and fall into the replay path. No SELECT-then-INSERT race.

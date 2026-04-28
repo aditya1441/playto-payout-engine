@@ -15,13 +15,6 @@ from .models import BankAccount, LedgerEntry, Merchant, Payout
 
 
 class CreatePayoutView(APIView):
-    """
-    POST /api/v1/payouts
-
-    Idempotent payout creation. Requires an Idempotency-Key header.
-    Repeating the request with the same key and body returns the original
-    response without creating a duplicate payout.
-    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -56,7 +49,6 @@ class CreatePayoutView(APIView):
 
 
 class BalanceView(APIView):
-    """GET /api/v1/merchants/<merchant_id>/balance"""
     permission_classes = [AllowAny]
 
     def get(self, request, merchant_id):
@@ -69,7 +61,6 @@ class BalanceView(APIView):
 
 
 class PayoutListView(APIView):
-    """GET /api/v1/merchants/<merchant_id>/payouts"""
     permission_classes = [AllowAny]
 
     def get(self, request, merchant_id):
@@ -81,7 +72,6 @@ class PayoutListView(APIView):
 
 
 class LedgerListView(APIView):
-    """GET /api/v1/merchants/<merchant_id>/ledger"""
     permission_classes = [AllowAny]
 
     def get(self, request, merchant_id):

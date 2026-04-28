@@ -24,13 +24,6 @@ class PayoutMode(models.TextChoices):
 
 
 class Merchant(models.Model):
-    """
-    Represents a business on the platform.
-
-    Balance is intentionally NOT stored here — it is derived from ledger
-    entries to maintain a single source of truth and full auditability.
-    A mutable balance field is a liability in a money-moving system.
-    """
     id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name       = models.CharField(max_length=255)
     email      = models.EmailField(unique=True)
@@ -51,15 +44,10 @@ class Merchant(models.Model):
 
 
 class BankAccount(models.Model):
-    """
-    A verified Indian bank account belonging to a merchant.
-    Multiple accounts per merchant are allowed.
-    Only is_verified=True accounts are eligible for payouts.
-    """
     id                  = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     merchant            = models.ForeignKey(Merchant, on_delete=models.PROTECT, related_name='bank_accounts')
     account_holder_name = models.CharField(max_length=255)
-    account_number      = models.CharField(max_length=20)  # stored as string to preserve leading zeros
+    account_number      = models.CharField(max_length=20)
     ifsc_code           = models.CharField(max_length=11)
     is_default          = models.BooleanField(default=False)
     is_verified         = models.BooleanField(default=False)
@@ -78,15 +66,6 @@ class BankAccount(models.Model):
 
 
 class LedgerEntry(models.Model):
-    """
-    Immutable, append-only double-entry bookkeeping record.
-
-    Never update or delete a row — only append new ones. The merchant's
-    current balance is always computed as SUM(CREDIT amounts) - SUM(DEBIT amounts).
-
-    balance_after is a running snapshot for point-in-time statement generation
-    and does not replace the aggregate as the authoritative balance source.
-    """
     id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     merchant     = models.ForeignKey(Merchant, on_delete=models.PROTECT, related_name='ledger_entries')
     payout       = models.ForeignKey(
@@ -97,7 +76,7 @@ class LedgerEntry(models.Model):
         blank=True,
     )
     entry_type   = models.CharField(max_length=10, choices=LedgerEntryType.choices)
-    amount       = models.BigIntegerField()  # always in paise; BigInteger avoids float drift
+    amount       = models.BigIntegerField()
     balance_after = models.BigIntegerField()
     description  = models.TextField(blank=True)
     created_at   = models.DateTimeField(default=timezone.now, db_index=True)
@@ -124,14 +103,6 @@ class LedgerEntry(models.Model):
 
 
 class Payout(models.Model):
-    """
-    A single payout instruction from a merchant to their bank account.
-
-    Valid state transitions (enforced at the service layer via guarded UPDATEs):
-        PENDING → PROCESSING → COMPLETED
-                             → FAILED
-        PENDING → CANCELLED
-    """
     id             = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     merchant       = models.ForeignKey(Merchant, on_delete=models.PROTECT, related_name='payouts')
     bank_account   = models.ForeignKey(BankAccount, on_delete=models.PROTECT, related_name='payouts')
@@ -170,17 +141,10 @@ class Payout(models.Model):
 
 
 class IdempotencyKey(models.Model):
-    """
-    Guards against duplicate payout requests caused by network retries.
-
-    The client generates one key per intended operation and sends it in the
-    Idempotency-Key header. On retry, the exact same key is reused.
-    Scoped per merchant — two merchants may share the same key string.
-    """
     id             = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     merchant       = models.ForeignKey(Merchant, on_delete=models.PROTECT, related_name='idempotency_keys')
     key            = models.CharField(max_length=255)
-    request_hash   = models.CharField(max_length=64)  # SHA-256 of request body; detects conflicting retries
+    request_hash   = models.CharField(max_length=64)
     response_status = models.IntegerField(null=True, blank=True)
     response_body  = models.JSONField(null=True, blank=True)
     created_at     = models.DateTimeField(default=timezone.now)

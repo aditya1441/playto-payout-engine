@@ -1,61 +1,72 @@
-# Playto Payout Engine 💳
+# Playto Payout Engine
 
-A robust, mathematically safe, and highly concurrent payout processing engine built for the Playto Founding Engineer Challenge. 
+Payout engine for Indian merchants to withdraw international payment collections to their bank accounts.
 
-## Features
-- **Idempotent Payout API:** Guaranteed exactly-once execution. Keys expire after 24 hours.
-- **Race-safe Ledgers:** Double-spend prevention via `select_for_update` DB-level row locks.
-- **Strict Integer Math:** All money is modeled in `paise` (BigIntegerField). No float rounding errors.
-- **Atomic Background Workers:** Uses Celery with a CAS (Compare-And-Swap) queue pattern to ensure no payout is processed twice. Includes an auto-recovery beat task for stuck jobs.
-- **Full Dashboard:** A modern, beautiful React + Tailwind SPA for merchants to request and track payouts in real-time.
+## Stack
 
-## Tech Stack
-- **Backend:** Django, Django Rest Framework, Celery, Redis, PostgreSQL (or SQLite for local dev)
-- **Frontend:** React, Vite, Tailwind CSS v3
-- **Testing:** Django TestCase & TransactionTestCase (Concurrent thread testing)
+- **Backend:** Django + DRF, PostgreSQL, Celery + Redis
+- **Frontend:** React + Vite
+- **Deploy:** Railway (Gunicorn + WhiteNoise)
 
-## Local Setup Instructions
-
-### 1. Backend Setup
-Ensure you have Python 3.10+ and Redis installed locally (`brew install redis` && `redis-server`).
+## Local Setup
 
 ```bash
-# Install dependencies
+# Backend
 pip install -r requirements.txt
-
-# Run database migrations
 python manage.py migrate
+python manage.py seed
 
-# Seed the database with 3 test merchants (with varying balances)
-python manage.py shell < seed_demo.py
+# Start Redis (needed for Celery)
+redis-server
 
-# Start the Django development server
+# Start Celery worker + beat
+celery -A payout_engine worker -l info &
+celery -A payout_engine beat -l info &
+
+# Start Django
 python manage.py runserver
+
+# Frontend (separate terminal)
+cd frontend && npm install && npm run dev
 ```
 
-### 2. Start Celery Workers
-In a separate terminal, start the background worker that simulates the bank gateway (70% success, 20% fail, 10% stuck timeouts):
+Dashboard runs at `http://localhost:3000`, API at `http://localhost:8000/api/v1/`.
+
+## Seeded Merchants
+
+| Merchant | ID | Balance |
+|---|---|---|
+| Acme Freelance | `00000000-...-000000000001` | ₹82,500 |
+| Global Agency India | `00000000-...-000000000002` | ₹2,30,000 |
+| Dev Studio Tech | `00000000-...-000000000003` | ₹18,500 |
+
+Switch between merchants using the dropdown in the top-right corner.
+
+## Deploy to Railway
+
+1. Push to GitHub
+2. Create new project on [railway.app](https://railway.app)
+3. Add **PostgreSQL** and **Redis** plugins
+4. Connect your GitHub repo
+5. Set build command: `bash build.sh`
+6. Set start command: `gunicorn payout_engine.wsgi --bind 0.0.0.0:$PORT`
+7. Add a separate service for the Celery worker: `celery -A payout_engine worker -l info`
+
+Railway auto-sets `DATABASE_URL` and `REDIS_URL`.
+
+## API Endpoints
+
+```
+POST   /api/v1/payouts                        — Create payout (requires Idempotency-Key header)
+GET    /api/v1/merchants/{id}/balance          — Get merchant balance
+GET    /api/v1/merchants/{id}/payouts          — List payouts
+GET    /api/v1/merchants/{id}/ledger           — List ledger entries
+```
+
+## Tests
+
 ```bash
-celery -A payout_engine worker -l info
+python manage.py test core -v2
 ```
 
-*(Optional)* Run the Celery Beat scheduler to automatically recover stuck payouts:
-```bash
-celery -A payout_engine beat -l info
-```
-
-### 3. Frontend Dashboard Setup
-In a third terminal:
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Visit `http://localhost:3000` to see the Merchant Dashboard!
-
-## Running Tests
-Run the 30 rigorous integration tests covering concurrency locks, ledger arithmetic, and idempotency states:
-```bash
-python manage.py test core
-```
+Covers: balance calculation, idempotency (hash, replay, conflict, expiry), concurrent double-spend prevention, state machine transitions.
